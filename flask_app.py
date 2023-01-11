@@ -22,15 +22,15 @@ def main():
 def handle_dialog(res,req):
     if req['request']['original_utterance']:
         ## Проверяем, есть ли содержимое
-        res['response']['text'], res['response']['end_session'] = handle_dialog(req['request']['original_utterance'])
+        res['response']['text'], res['response']['end_session'] = dialog(req['request']['original_utterance'])
 
     else:
         ## Если это первое сообщение — представляемся
         res['response']['text'] = "привет. Я- тестовый навык написанный на питоне. знаю, что криворуко накодили меня, но всё же я полноценный скилл. я пока умею только повторять за тобой."
 
 
-def handle_dialog(text):
+def dialog(text):
 	if "до свидания" in text or "пока" in text or "закрой" in text or "выключи" in text:
-		return "ты меня вырубил.", True
+		return ("ты меня вырубил.", True)
 	else:
-		return text, False
+		return (text, False)
