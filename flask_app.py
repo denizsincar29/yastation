@@ -1,7 +1,10 @@
 from flask import Flask
 from flask import request
+import requests
 import json
+import git 
 
+g = git.cmd.Git("hello_world_alice")
 app = Flask(__name__)
 
 @app.route('/post', methods=['POST'])
@@ -18,6 +21,23 @@ def main():
     handle_dialog(response, request.json)
     return json.dumps(response)
 
+@app.route("/update")
+def update():
+	g.pull()
+	username = "voicechat"
+	api_token = "b2cc50d42379ca2216a0dde6a4f202196966722d"
+	domain_name="voicechat.pythonanywhere.com"
+
+	response = requests.post(
+		'https://www.pythonanywhere.com/api/v0/user/{username}/webapps/{domain_name}/reload/'.format(
+			username=username, domain_name=domain_name
+		),
+		headers={'Authorization': 'Token {token}'.format(token=api_token)}
+	)
+	if response.status_code == 200:
+		return ('reloaded OK')
+	else:
+		return str('Got unexpected status code {}: {!r}'.format(response.status_code, response.content))
 
 def handle_dialog(res,req):
     if req['request']['original_utterance']:
