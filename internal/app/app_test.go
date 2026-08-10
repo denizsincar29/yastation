@@ -1,0 +1,202 @@
+package app
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func newTestApp() (*App, *fakeStation) {
+	f := &fakeStation{scenarios: []string{"Вечер"}}
+	a := New(f)
+	return a, f
+}
+
+func TestDefaultTextIsSaid(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.Execute(context.Background(), "привет с компа")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "[сказано] привет с компа" {
+		t.Fatalf("out=%q", out)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "say::привет с компа" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestAskAliasSendsCommand(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	_, err := a.Execute(context.Background(), "/ask чё делаешь")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "cmd::чё делаешь" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestVolumeParsesFloat(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/volume 0.3"); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "volume::0.3" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestVolumeRejectsGarbage(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/volume loud"); err == nil {
+		t.Fatal("expected error for non-numeric volume")
+	}
+}
+
+func TestStationOverrideArg(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/say station=Кухня привет"); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "say:Кухня:привет" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestTimerAndAlarmAndReminder(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/timer 10 проверить духовку")
+	mustExec(t, a, "/alarm 7:30")
+	mustExec(t, a, "/reminder завтра купить хлеб")
+
+	calls := f.Calls()
+	want := []string{
+		"timer::10:проверить духовку",
+		"alarm::7:30:",
+		"reminder::завтра:купить хлеб",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls=%v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("call %d: got %q want %q", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestScenariosListAndRun(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out := mustExec(t, a, "/scenarios")
+	if !strings.Contains(out, "Вечер") {
+		t.Fatalf("out=%q", out)
+	}
+	mustExec(t, a, "/scenario Вечер")
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "scenario:Вечер" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestUnknownCommandErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/nope"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestEveryAndUnscheduleAll(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+
+	mustExec(t, a, "/every 0.02s /say tick")
+	time.Sleep(110 * time.Millisecond)
+	mustExec(t, a, "/unschedule_all")
+
+	calls := f.Calls()
+	if len(calls) < 3 {
+		t.Fatalf("expected several ticks, got %v", calls)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if len(f.Calls()) != len(calls) {
+		t.Fatal("task kept firing after /unschedule_all")
+	}
+}
+
+func TestScheduleStatusListing(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/every 1h /say a")
+	out := mustExec(t, a, "/schedules")
+	if !strings.Contains(out, "every 1h") || !strings.Contains(out, "/say a") {
+		t.Fatalf("out=%q", out)
+	}
+}
+
+func TestExecuteScript(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+
+	dir := t.TempDir()
+	path := dir + "/script.txt"
+	script := "# comment\n\n/volume 0.5\n/say доброе утро\n/weather\n"
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	mustExec(t, a, "/execute "+path)
+	calls := f.Calls()
+	want := []string{"volume::0.5", "say::доброе утро", "weather:"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls=%v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("call %d: got %q want %q", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestExecuteScriptMissingFile(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/execute /no/such/file.txt"); err == nil {
+		t.Fatal("expected error for missing script file")
+	}
+}
+
+func TestEnqueueDoesNotBlockCaller(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 50; i++ {
+			a.Enqueue("/say tick")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Enqueue blocked")
+	}
+}
+
+func mustExec(t *testing.T, a *App, line string) string {
+	t.Helper()
+	out, err := a.Execute(context.Background(), line)
+	if err != nil {
+		t.Fatalf("%s -> unexpected error: %v", line, err)
+	}
+	return out
+}
