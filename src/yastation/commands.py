@@ -6,11 +6,27 @@
 """
 from __future__ import annotations
 
-from func_parser import CommandParser, arg
+from func_parser import CommandParser, Scheduler, arg
 
 from .station_client import YandexStationClient
 
 parser = CommandParser(prefix="/", hybrid=True)
+
+_scheduler: Scheduler | None = None
+
+
+def _get_scheduler(ctx) -> Scheduler:
+    """Планировщик ленивый: создаётся при первом /every или /at и держит
+    в замыкании тот ExecutionContext, из которого его впервые вызвали
+    (в нашем REPL контекст один на всю сессию, так что это безопасно)."""
+    global _scheduler
+    if _scheduler is None:
+
+        async def _run(command_str: str) -> None:
+            await parser.execute(command_str, ctx)
+
+        _scheduler = Scheduler(execute_fn=_run)
+    return _scheduler
 
 
 def _client(ctx) -> YandexStationClient:
@@ -44,7 +60,11 @@ async def cmd_say(ctx, text):
     return _fmt(f"[сказано] {phrase}")
 
 
-@parser.command("cmd", aliases=["c"], help="Отправить произвольную голосовую команду Алисе")
+@parser.command(
+    "cmd",
+    aliases=["c", "ask"],
+    help="Голосовая команда/вопрос Алисе, как будто произнесено вслух. Ответ прозвучит из колонки, в терминал не возвращается.",
+)
 @arg("text", type=str, required=True, variadic=True, help="Команда, как будто произнесённая голосом")
 async def cmd_command(ctx, text):
     client = _client(ctx)
@@ -163,6 +183,47 @@ async def cmd_scenario(ctx, name):
     scenario_name = " ".join(name) if isinstance(name, list) else str(name)
     await client.run_scenario(scenario_name)
     return _fmt(f"[сценарий запущен] {scenario_name}")
+
+
+@parser.command(
+    "every",
+    help="Периодическая команда: /every 5m /say время отчёта  (единицы: s, m, h)",
+)
+@arg("interval", type=str, required=True, help="Например 30s, 5m, 2h")
+@arg("cmd", type=str, required=True, variadic=True, help="Любая команда этого парсера, с /")
+async def cmd_every(ctx, interval: str, cmd):
+    scheduler = _get_scheduler(ctx)
+    command_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    scheduler.schedule(f"every {interval}", command_str)
+    return _fmt(f"[запланировано повторение] every {interval} -> {command_str}")
+
+
+@parser.command(
+    "at",
+    help="Разовая команда в указанное время: /at 7:30 /say доброе утро",
+)
+@arg("time", type=str, required=True, help="Время ЧЧ:ММ")
+@arg("cmd", type=str, required=True, variadic=True, help="Любая команда этого парсера, с /")
+async def cmd_at(ctx, time: str, cmd):
+    scheduler = _get_scheduler(ctx)
+    command_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    scheduler.schedule(f"at {time}", command_str)
+    return _fmt(f"[запланировано] at {time} -> {command_str}")
+
+
+@parser.command("schedules", aliases=["jobs"], help="Список активных запланированных команд")
+async def cmd_schedules(ctx):
+    scheduler = _get_scheduler(ctx)
+    if not scheduler._tasks:
+        return _fmt("активных задач нет")
+    return "\n".join(f"- {t.spec}: {t.command}" for t in scheduler._tasks)
+
+
+@parser.command("unschedule_all", aliases=["cancel_all"], help="Отменить все запланированные команды")
+async def cmd_unschedule_all(ctx):
+    scheduler = _get_scheduler(ctx)
+    scheduler.cancel_all()
+    return _fmt("[все запланированные команды отменены]")
 
 
 @parser.command("help", aliases=["h", "?"], help="Список команд")
