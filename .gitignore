@@ -1,5 +1,7 @@
-.venv/
-__pycache__/
-*.pyc
-src/yastation/yandex_tokens.json
-src/yastation/.env
+/bin/
+*.exe
+*.test
+*.out
+
+# токены — никогда не коммитить
+tokens.json
