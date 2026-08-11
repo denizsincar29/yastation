@@ -1,9 +1,36 @@
 package quasar
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
+
+// ClientFromXToken builds a ready-to-use Client directly from an OAuth
+// x-token the caller already has (e.g. obtained through their own Yandex
+// OAuth flow), skipping the QR-login/local-token-file flow entirely.
+// Used by yastation-server's multi-tenant "bring your own token" mode,
+// where each request supplies its own account's token instead of relying
+// on the server's own saved one.
+func ClientFromXToken(xToken string) (*Client, error) {
+	sess, err := NewSession()
+	if err != nil {
+		return nil, err
+	}
+	sess.XToken = xToken
+	ok, err := sess.LoginToken(xToken)
+	if err != nil {
+		return nil, fmt.Errorf("вход по токену: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("яндекс отклонил токен")
+	}
+	c := NewClient(sess)
+	if err := c.Refresh(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
 
 // Connect loads saved tokens from disk, makes sure the session is still
 // valid, and refreshes the device/scenario list. Callers that haven't

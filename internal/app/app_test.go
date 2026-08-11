@@ -21,7 +21,7 @@ func TestDefaultTextIsSaid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "[сказано] привет с компа" {
+	if out != "Алиса сказала: привет с компа" {
 		t.Fatalf("out=%q", out)
 	}
 	if calls := f.Calls(); len(calls) != 1 || calls[0] != "say::привет с компа" {
@@ -41,13 +41,28 @@ func TestAskAliasSendsCommand(t *testing.T) {
 	}
 }
 
+func TestDashPrefixIsCommandAlias(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.Execute(context.Background(), "- какая погода")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "Алиса услышала команду: какая погода" {
+		t.Fatalf("out=%q", out)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "cmd::какая погода" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
 func TestVolumeParsesFloat(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
-	if _, err := a.Execute(context.Background(), "/volume 0.3"); err != nil {
+	if _, err := a.Execute(context.Background(), "/volume 3"); err != nil {
 		t.Fatal(err)
 	}
-	if calls := f.Calls(); len(calls) != 1 || calls[0] != "volume::0.3" {
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "volume::3" {
 		t.Fatalf("calls=%v", calls)
 	}
 }

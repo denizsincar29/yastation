@@ -5,17 +5,31 @@
 // concurrent requests can't race each other editing the same speaker's
 // scenario; each request waits for its own actual result before
 // answering (see internal/app.App.Execute).
+//
+// Two auth modes:
+//   - Default: the server's own pre-authenticated account (from
+//     yastation-auth), same for every request.
+//   - "Bring your own token": a request carrying an X-Yandex-Token header
+//     is executed against *that* Yandex account instead — e.g. to run
+//     this once on your own server and let it control a family member's
+//     speaker with their own token, without them needing to run anything
+//     themselves. Clients built this way are cached briefly per token
+//     (see tokenClientCache) so repeated requests don't redo the login
+//     handshake every time.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/denizsincar29/yastation/internal/app"
@@ -30,6 +44,16 @@ func main() {
 		log.Println("Задайте переменную окружения, если сервер смотрит наружу, а не только в localhost.")
 	}
 
+	var customCfg *app.CustomCommandConfig
+	if p := os.Getenv("YASTATION_COMMANDS_FILE"); p != "" {
+		cfg, err := app.LoadCustomCommandConfig(p)
+		if err != nil {
+			log.Fatalf("Не смог загрузить свои команды из %s: %v", p, err)
+		}
+		customCfg = cfg
+		log.Printf("Загружено своих команд: %d (из %s)", len(cfg.Commands), p)
+	}
+
 	log.Println("Подключаюсь к Яндекс Станции...")
 	client, err := quasar.Connect()
 	if err != nil {
@@ -41,13 +65,16 @@ func main() {
 	}
 	log.Printf("Подключено. Колонок найдено: %d (%s)", len(client.Speakers), strings.Join(names, ", "))
 
-	a := app.New(client)
+	a := buildApp(client, customCfg)
 	defer a.Close()
+
+	tokenClients := newTokenClientCache(20 * time.Minute)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("POST /command", handleCommand(a))
+	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, customCfg))
 	mux.HandleFunc("GET /schedules", handleSchedules(a))
+	mux.HandleFunc("GET /stations", handleStations(tokenClients))
 
 	handler := withAuth(token, withLogging(mux))
 
@@ -55,11 +82,81 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
+func buildApp(client *quasar.Client, customCfg *app.CustomCommandConfig) *app.App {
+	a := app.New(client)
+	if customCfg != nil {
+		if err := a.RegisterCustomCommands(customCfg); err != nil {
+			log.Fatalf("Ошибка в конфиге команд: %v", err)
+		}
+	}
+	return a
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
+}
+
+// --- per-token client cache (bring-your-own-token mode) -----------------
+
+type tokenClientCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	entries map[string]*tokenCacheEntry
+}
+
+type tokenCacheEntry struct {
+	client  *quasar.Client
+	expires time.Time
+}
+
+func newTokenClientCache(ttl time.Duration) *tokenClientCache {
+	return &tokenClientCache{ttl: ttl, entries: map[string]*tokenCacheEntry{}}
+}
+
+// hashToken never stores or logs the raw token, only a digest, so it
+// can't leak through a crash dump, log line, or map key inspection.
+func hashToken(xToken string) string {
+	sum := sha256.Sum256([]byte(xToken))
+	return hex.EncodeToString(sum[:])
+}
+
+// get returns a ready quasar.Client for xToken, building and caching one
+// (a fresh login handshake + device/scenario refresh) on first use.
+func (c *tokenClientCache) get(xToken string) (*quasar.Client, error) {
+	key := hashToken(xToken)
+
+	c.mu.Lock()
+	c.sweepLocked()
+	if e, ok := c.entries[key]; ok {
+		e.expires = time.Now().Add(c.ttl)
+		client := e.client
+		c.mu.Unlock()
+		return client, nil
+	}
+	c.mu.Unlock()
+
+	client, err := quasar.ClientFromXToken(xToken)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.entries[key] = &tokenCacheEntry{client: client, expires: time.Now().Add(c.ttl)}
+	c.mu.Unlock()
+	return client, nil
+}
+
+// sweepLocked drops expired entries. Called with c.mu held.
+func (c *tokenClientCache) sweepLocked() {
+	now := time.Now()
+	for k, e := range c.entries {
+		if now.After(e.expires) {
+			delete(c.entries, k)
+		}
+	}
 }
 
 // --- middleware -------------------------------------------------------
@@ -100,7 +197,10 @@ type commandRequest struct {
 
 	// Text + Station are a convenience form for the common case: send
 	// {"text": "привет", "station": "Кухня"} and it's spoken as-is.
-	// Station is optional; omitted means the default speaker.
+	// Station is optional; omitted means the default speaker. Station
+	// can also be given as the X-Station header instead of in the body —
+	// useful when Line is used and already has its own station=... arg
+	// baked in isn't convenient.
 	Text    string `json:"text"`
 	Station string `json:"station"`
 	// AsCommand sends Text as a voice command (/cmd) instead of TTS
@@ -114,12 +214,15 @@ type commandResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func handleCommand(a *app.App) http.HandlerFunc {
+func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, customCfg *app.CustomCommandConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req commandRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "невалидный JSON: " + err.Error()})
 			return
+		}
+		if station := r.Header.Get("X-Station"); station != "" && req.Station == "" {
+			req.Station = station
 		}
 
 		line := req.Line
@@ -142,12 +245,66 @@ func handleCommand(a *app.App) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 
-		out, err := a.Execute(ctx, line)
+		// Bring-your-own-token mode: run against the caller's own Yandex
+		// account instead of the server's default one.
+		if xToken := r.Header.Get("X-Yandex-Token"); xToken != "" {
+			client, err := tokenClients.get(xToken)
+			if err != nil {
+				writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "не удалось войти с этим токеном: " + err.Error()})
+				return
+			}
+			tmpApp := buildApp(client, customCfg)
+			defer tmpApp.Close()
+			out, err := tmpApp.Execute(ctx, line)
+			if err != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, commandResponse{Error: err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
+			return
+		}
+
+		out, err := defaultApp.Execute(ctx, line)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, commandResponse{Error: err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
+	}
+}
+
+type stationJSON struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	HouseName string `json:"house_name,omitempty"`
+	Platform  string `json:"platform,omitempty"`
+}
+
+// handleStations lists the speakers on the account identified by the
+// required X-Yandex-Token header — the discovery step for
+// bring-your-own-token mode: call this first to find the station id/name
+// to pass as "station" in /command.
+func handleStations(tokenClients *tokenClientCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		xToken := r.Header.Get("X-Yandex-Token")
+		if xToken == "" {
+			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужен заголовок X-Yandex-Token"})
+			return
+		}
+		client, err := tokenClients.get(xToken)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "не удалось войти с этим токеном: " + err.Error()})
+			return
+		}
+		out := make([]stationJSON, 0, len(client.Speakers))
+		for _, d := range client.Speakers {
+			s := stationJSON{ID: d.ID, Name: d.Name, HouseName: d.HouseName}
+			if d.QuasarInfo != nil {
+				s.Platform = d.QuasarInfo.Platform
+			}
+			out = append(out, s)
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

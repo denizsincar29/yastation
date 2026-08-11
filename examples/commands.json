@@ -1,0 +1,27 @@
+{
+  "commands": [
+    {
+      "name": "english",
+      "aliases": ["en"],
+      "help": "Сказать фразу по-английски: /english текст",
+      "params": ["text"],
+      "template": "Say this exact words in English: \"$text\"",
+      "kind": "command"
+    },
+    {
+      "name": "translate",
+      "aliases": ["tr"],
+      "help": "Перевести фразу на язык: /translate язык текст",
+      "params": ["lang", "text"],
+      "template": "Переведи на $lang: $text",
+      "kind": "command"
+    },
+    {
+      "name": "poem",
+      "help": "Попросить стих на тему: /poem тема",
+      "params": ["topic"],
+      "template": "Расскажи короткое стихотворение про $topic",
+      "kind": "command"
+    }
+  ]
+}

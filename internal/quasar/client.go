@@ -337,9 +337,11 @@ func (c *Client) Notify(station, text string, volume float64) error {
 	return c.Say(station, text)
 }
 
+// Volume sets the speaker volume. level is 0..10 (Alice's own native
+// scale, same as the physical volume dial/voice command), not a 0..1
+// fraction — clamped to that range.
 func (c *Client) Volume(station string, level float64) error {
-	// Alice understands 0..10 steps, not 0..1 fractions.
-	step := int(math.Round(level * 10))
+	step := int(math.Round(level))
 	if step < 0 {
 		step = 0
 	}
