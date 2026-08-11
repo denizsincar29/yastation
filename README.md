@@ -219,6 +219,29 @@ curl -X POST localhost:8737/command \
 не хранится сам токен — только его sha256 в качестве ключа кэша), чтобы
 не проходить логин заново на каждый запрос.
 
+### Python-клиент
+
+`clients/python/yastation_client.py` — тонкая обёртка над этим же HTTP
+API, без внешних зависимостей (только stdlib, `urllib`/`json`), можно
+просто скопировать файл к себе в проект:
+
+```python
+from yastation_client import YastationClient
+
+client = YastationClient("http://localhost:8737", server_token="секрет")
+client.say("привет с питона")
+client.command("/volume 3")
+
+# bring-your-own-token: колонка другого аккаунта
+mom = YastationClient("http://localhost:8737", server_token="секрет", yandex_token="мамин x-token")
+for station in mom.stations():
+    print(station.id, station.name)
+mom.say("не забудь лекарство", station="Кухня")
+```
+
+Файл рабочий и как самостоятельный пример: `python3 yastation_client.py`
+(смотри переменные окружения в шапке файла).
+
 ## Деплой на сервер (systemd + Caddy)
 
 ```bash
