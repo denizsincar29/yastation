@@ -82,10 +82,14 @@ func (d Device) IsSpeaker() bool {
 	return !nonSpeakerPlatforms[d.QuasarInfo.Platform]
 }
 
-// Trigger returns the synthetic voice-trigger phrase used to identify this
-// device's dedicated scenario.
+// Trigger returns the synthetic voice-trigger phrase used to identify
+// this device's dedicated scenario. Built from the device's own top-level
+// id (the smart-home/IoT platform id used by the scenario system), not
+// quasar_info.device_id (a different, hardware-level id used only by the
+// separate local Glagol protocol) — using the wrong one here is what
+// caused Yandex to reject scenario creation with DEVICE_NOT_FOUND.
 func (d Device) Trigger() string {
-	return encodeDeviceTrigger(d.QuasarInfo.DeviceID)
+	return encodeDeviceTrigger(d.ID)
 }
 
 type Scenario struct {
@@ -183,13 +187,14 @@ func scenarioTrigger(dev Device) []ScenarioTrigger {
 
 // buildTTSScenario builds the create/update payload for a scenario that,
 // when triggered via the API, makes the device say `text` out loud
-// (text-to-speech).
+// (text-to-speech). Uses dev.ID (the IoT/scenario-system device id), not
+// quasar_info.device_id.
 func buildTTSScenario(name string, dev Device, text string) Scenario {
 	return Scenario{
 		Name:     name,
 		Icon:     "home",
 		Triggers: scenarioTrigger(dev),
-		Steps: []ScenarioStep{scenarioActionStep(dev.QuasarInfo.DeviceID, ScenarioCapability{
+		Steps: []ScenarioStep{scenarioActionStep(dev.ID, ScenarioCapability{
 			Type:  "devices.capabilities.quasar",
 			State: ScenarioCapabilityState{Instance: "tts", Value: map[string]string{"text": text}},
 		})},
@@ -204,7 +209,7 @@ func buildCommandScenario(name string, dev Device, action string) Scenario {
 		Name:     name,
 		Icon:     "home",
 		Triggers: scenarioTrigger(dev),
-		Steps: []ScenarioStep{scenarioActionStep(dev.QuasarInfo.DeviceID, ScenarioCapability{
+		Steps: []ScenarioStep{scenarioActionStep(dev.ID, ScenarioCapability{
 			Type:  "devices.capabilities.quasar.server_action",
 			State: ScenarioCapabilityState{Instance: "text_action", Value: action},
 		})},

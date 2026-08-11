@@ -67,7 +67,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Если это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth")
 		os.Exit(1)
 	}
-	fmt.Printf("Подключено. Колонок найдено: %d\n", len(client.Speakers))
+	fmt.Printf("Подключено. Колонок найдено: %d (%s)\n", len(client.Speakers), speakerNames(client.Speakers))
 
 	a := app.New(client)
 	defer a.Close()
@@ -102,6 +102,14 @@ func runOnce(ctx context.Context, a *app.App, commands []string) int {
 		}
 	}
 	return exitCode
+}
+
+func speakerNames(speakers []quasar.Device) string {
+	names := make([]string, len(speakers))
+	for i, d := range speakers {
+		names[i] = d.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func repl(ctx context.Context, a *app.App) {
