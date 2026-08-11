@@ -1,11 +1,17 @@
 package quasar
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/denizsincar29/yastation/internal/glagol"
 )
 
 // Client is the main entry point of the library: an authenticated Quasar
@@ -21,11 +27,42 @@ type Client struct {
 	// commands when the caller doesn't specify one explicitly.
 	DefaultDeviceID   string
 	DefaultDeviceName string
+
+	// Logger receives best-effort diagnostics, e.g. when a Glagol send
+	// fails and the client falls back to the slower cloud path. Defaults
+	// to log.Default() if nil.
+	Logger *log.Logger
+
+	glagolMu    sync.Mutex
+	glagolHosts map[string]string // device id -> "host:port"
+	glagolConns map[string]*glagol.Client
+	glagolTok   map[string]string
 }
 
 // NewClient wraps an already-authenticated Session.
 func NewClient(sess *Session) *Client {
-	return &Client{Session: sess}
+	return &Client{Session: sess, glagolHosts: map[string]string{}, glagolConns: map[string]*glagol.Client{}, glagolTok: map[string]string{}}
+}
+
+// EnableGlagol registers a speaker's local network address so future
+// Say/Command calls to that device use the fast local Glagol WebSocket
+// protocol (typically well under 100ms) instead of the cloud
+// scenario-trigger fallback (~1-2s). hostPort looks like
+// "192.168.1.42:1961" — find it via your router's DHCP leases or the
+// official Yandex app; there's no reliable local-network discovery
+// without pulling in an mDNS dependency, so this project asks you to
+// supply it explicitly (see README/YASTATION_GLAGOL_HOSTS).
+func (c *Client) EnableGlagol(deviceID, hostPort string) {
+	c.glagolMu.Lock()
+	defer c.glagolMu.Unlock()
+	c.glagolHosts[deviceID] = hostPort
+}
+
+func (c *Client) logger() *log.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return log.Default()
 }
 
 // Refresh reloads the device list and scenario list from Yandex, and makes
@@ -174,14 +211,85 @@ func (c *Client) selectSpeaker(nameOrID string) (Device, error) {
 	return Device{}, fmt.Errorf("колонка %q не найдена", want)
 }
 
-// sendPhrase is the shared plumbing behind Say/Command: make sure the
-// device has a trigger scenario, then fire it with the given phrase baked
-// into the action payload.
+// sendPhrase is the shared plumbing behind Say/Command: try the fast
+// local Glagol path first (if a host is registered for this device via
+// EnableGlagol), falling back to the cloud scenario-trigger path on any
+// error (no host registered, network unreachable, device rejected the
+// token, etc). Glagol only has one command shape ("sendText" — see
+// PROTOCOL_NOTES.md), so tts is ignored on that path; it's preserved on
+// the cloud fallback.
 func (c *Client) sendPhrase(station, phrase string, tts bool) error {
 	dev, err := c.selectSpeaker(station)
 	if err != nil {
 		return err
 	}
+
+	if hostPort, ok := c.glagolHostFor(dev.QuasarInfo.DeviceID); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.sendGlagol(ctx, dev, hostPort, phrase)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		c.logger().Printf("[glagol] %s: не получилось (%v), пробую через облако", dev.Name, err)
+	}
+
+	return c.sendCloud(dev, phrase, tts)
+}
+
+func (c *Client) glagolHostFor(deviceID string) (string, bool) {
+	c.glagolMu.Lock()
+	defer c.glagolMu.Unlock()
+	h, ok := c.glagolHosts[deviceID]
+	return h, ok
+}
+
+// sendGlagol sends phrase over the local WebSocket, lazily fetching a
+// Glagol token and dialing the connection on first use, then reusing both
+// for subsequent calls to the same device.
+func (c *Client) sendGlagol(ctx context.Context, dev Device, hostPort, phrase string) error {
+	c.glagolMu.Lock()
+	conn, haveConn := c.glagolConns[dev.QuasarInfo.DeviceID]
+	token, haveTok := c.glagolTok[dev.QuasarInfo.DeviceID]
+	c.glagolMu.Unlock()
+
+	if !haveTok {
+		tok, err := glagol.GetToken(ctx, c.Session.HTTP, c.Session.XToken, dev.QuasarInfo.DeviceID, dev.QuasarInfo.Platform)
+		if err != nil {
+			return fmt.Errorf("токен: %w", err)
+		}
+		token = tok
+		c.glagolMu.Lock()
+		c.glagolTok[dev.QuasarInfo.DeviceID] = token
+		c.glagolMu.Unlock()
+	}
+
+	if !haveConn {
+		newConn, err := glagol.Dial(ctx, hostPort, token)
+		if err != nil {
+			return fmt.Errorf("подключение: %w", err)
+		}
+		conn = newConn
+		c.glagolMu.Lock()
+		c.glagolConns[dev.QuasarInfo.DeviceID] = conn
+		c.glagolMu.Unlock()
+	}
+
+	if err := conn.SendText(ctx, phrase); err != nil {
+		// connection may have gone stale (token expired, station
+		// rebooted); drop it so the next call reconnects from scratch
+		// instead of failing forever.
+		c.glagolMu.Lock()
+		delete(c.glagolConns, dev.QuasarInfo.DeviceID)
+		delete(c.glagolTok, dev.QuasarInfo.DeviceID)
+		c.glagolMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// sendCloud is the original scenario-trigger path through Yandex's cloud.
+func (c *Client) sendCloud(dev Device, phrase string, tts bool) error {
 	kind := "command"
 	build := buildCommandScenario("yastation: "+dev.Name, dev, phrase)
 	if tts {
