@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -195,7 +196,10 @@ func (c *Client) selectSpeaker(nameOrID string) (Device, error) {
 		return c.Speakers[0], nil
 	}
 	for _, d := range c.Speakers {
-		if d.ID == want || strings.EqualFold(d.Name, want) {
+		if d.ID == want || strings.EqualFold(d.Name, want) || strings.EqualFold(d.HouseName, want) {
+			return d, nil
+		}
+		if d.QuasarInfo != nil && d.QuasarInfo.DeviceID == want {
 			return d, nil
 		}
 	}
@@ -321,13 +325,21 @@ func (c *Client) Say(station, text string) error { return c.sendPhrase(station, 
 
 func (c *Client) Command(station, text string) error { return c.sendPhrase(station, text, false) }
 
-func (c *Client) Notify(station, text string) error {
+// Notify sets the volume (if volume >= 0) and then says text, matching
+// the reference behaviour: a notification is a volume bump followed by a
+// TTS phrase, not just TTS. Pass volume < 0 to skip the volume step.
+func (c *Client) Notify(station, text string, volume float64) error {
+	if volume >= 0 {
+		if err := c.Volume(station, volume); err != nil {
+			return err
+		}
+	}
 	return c.Say(station, text)
 }
 
 func (c *Client) Volume(station string, level float64) error {
 	// Alice understands 0..10 steps, not 0..1 fractions.
-	step := int(level * 10)
+	step := int(math.Round(level * 10))
 	if step < 0 {
 		step = 0
 	}
@@ -337,12 +349,12 @@ func (c *Client) Volume(station string, level float64) error {
 	return c.Command(station, fmt.Sprintf("громкость на %d", step))
 }
 
-func (c *Client) Play(station string) error  { return c.Command(station, "продолжи") }
+func (c *Client) Play(station string) error  { return c.Command(station, "продолжить") }
 func (c *Client) Pause(station string) error { return c.Command(station, "пауза") }
 func (c *Client) Stop(station string) error  { return c.Command(station, "останови") }
 func (c *Client) Next(station string) error  { return c.Command(station, "следующий трек") }
 func (c *Client) Previous(station string) error {
-	return c.Command(station, "предыдущий трек")
+	return c.Command(station, "прошлый трек")
 }
 
 func (c *Client) Timer(station string, minutes int, label string) error {
@@ -362,7 +374,7 @@ func (c *Client) Alarm(station, atTime, label string) error {
 }
 
 func (c *Client) Reminder(station, text, when string) error {
-	return c.Command(station, fmt.Sprintf("напомни %s %s", when, text))
+	return c.Command(station, fmt.Sprintf("напомни %s: %s", when, text))
 }
 
 func (c *Client) Weather(station string) error { return c.Command(station, "какая погода") }

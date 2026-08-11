@@ -43,8 +43,8 @@ func (f *fakeStation) Say(station, text string) error {
 func (f *fakeStation) Command(station, text string) error {
 	return f.record(fmt.Sprintf("cmd:%s:%s", station, text))
 }
-func (f *fakeStation) Notify(station, text string) error {
-	return f.record(fmt.Sprintf("notify:%s:%s", station, text))
+func (f *fakeStation) Notify(station, text string, volume float64) error {
+	return f.record(fmt.Sprintf("notify:%s:%s:%v", station, text, volume))
 }
 func (f *fakeStation) Volume(station string, level float64) error {
 	return f.record(fmt.Sprintf("volume:%s:%v", station, level))

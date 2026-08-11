@@ -23,7 +23,7 @@ import (
 type StationAPI interface {
 	Say(station, text string) error
 	Command(station, text string) error
-	Notify(station, text string) error
+	Notify(station, text string, volume float64) error
 	Volume(station string, level float64) error
 	Play(station string) error
 	Pause(station string) error
@@ -113,6 +113,22 @@ func station(args []string) (string, []string) {
 	return "", args
 }
 
+// notifyVolume extracts an optional "volume=X" argument for /notify,
+// defaulting to 0.4 (matching the reference behaviour) when absent.
+func notifyVolume(args []string) (float64, []string) {
+	for i, a := range args {
+		if strings.HasPrefix(a, "volume=") {
+			v, err := strconv.ParseFloat(strings.TrimPrefix(a, "volume="), 64)
+			rest := append(append([]string{}, args[:i]...), args[i+1:]...)
+			if err != nil {
+				return 0.4, rest
+			}
+			return v, rest
+		}
+	}
+	return 0.4, args
+}
+
 func (a *App) registerCommands() {
 	d := a.Dispatcher
 
@@ -147,14 +163,20 @@ func (a *App) registerCommands() {
 		return "[команда отправлена] " + text, nil
 	}, "cmd", "c", "ask")
 
-	d.Handle("Уведомление (аналог /say)", func(ctx context.Context, args []string) (string, error) {
-		station, rest := station(args)
-		text := dispatch.Rest(rest)
-		if err := a.Client.Notify(station, text); err != nil {
-			return "", err
-		}
-		return "[уведомление] " + text, nil
-	}, "notify", "n")
+	d.Handle(
+		"Уведомление: громкость (по умолчанию 0.4) + фраза. volume=0.3 в любом месте аргументов, volume=-1 пропустить громкость",
+		func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			volume, rest := notifyVolume(rest)
+			text := dispatch.Rest(rest)
+			if text == "" {
+				return "", fmt.Errorf("нужен текст: /notify задача выполнена")
+			}
+			if err := a.Client.Notify(station, text, volume); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("[уведомление, громкость %v] %s", volume, text), nil
+		}, "notify", "n")
 
 	d.Handle("Громкость 0..1, например /volume 0.3", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
