@@ -44,7 +44,7 @@ func TestIsSpeakerFiltersNonSpeakerPlatforms(t *testing.T) {
 }
 
 func TestBuildScenariosDifferByInstance(t *testing.T) {
-	dev := Device{Name: "Кухня", QuasarInfo: &QuasarInfo{DeviceID: "abc123"}}
+	dev := Device{ID: "iot-kitchen-id", Name: "Кухня", QuasarInfo: &QuasarInfo{DeviceID: "hw-abc123"}}
 	tts := buildTTSScenario("t", dev, "привет")
 	cmd := buildCommandScenario("c", dev, "привет")
 
@@ -75,7 +75,11 @@ func TestBuildScenarioMatchesWireShape(t *testing.T) {
 	// Golden-shape check against the confirmed real wire format (see
 	// PROTOCOL_NOTES.md): a "trigger" wrapper key, steps.actions.v2,
 	// items[0].value.id / item_type / capabilities.
-	dev := Device{QuasarInfo: &QuasarInfo{DeviceID: "dev1"}}
+	// ID and QuasarInfo.DeviceID deliberately differ: the scenario/IoT
+	// system must use dev.ID, not quasar_info.device_id (using the wrong
+	// one is exactly what made Yandex reject scenario creation with
+	// DEVICE_NOT_FOUND against a real account).
+	dev := Device{ID: "dev1", QuasarInfo: &QuasarInfo{DeviceID: "hw-should-not-be-used"}}
 	s := buildCommandScenario("n", dev, "привет")
 
 	if len(s.Triggers) != 1 || s.Triggers[0].Trigger.Type != "scenario.trigger.voice" {

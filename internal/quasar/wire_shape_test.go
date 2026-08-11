@@ -62,7 +62,11 @@ func TestDecodeRealisticDevicesResponse(t *testing.T) {
 // silently drift back to the wrong shape (launch_devices/phrase/etc) that
 // caused device discovery to return zero speakers.
 func TestScenarioJSONMatchesConfirmedWireShape(t *testing.T) {
-	dev := Device{Name: "Кухня", QuasarInfo: &QuasarInfo{DeviceID: "abc"}}
+	// ID (used for the trigger/scenario payload) deliberately differs
+	// from QuasarInfo.DeviceID (a different, Glagol-only id) so this test
+	// would fail if the wrong one were used, the way it was before this
+	// bug was fixed against a real account.
+	dev := Device{ID: "abc", Name: "Кухня", QuasarInfo: &QuasarInfo{DeviceID: "hw-should-not-be-used"}}
 	trigger := dev.Trigger()
 
 	t.Run("tts", func(t *testing.T) {

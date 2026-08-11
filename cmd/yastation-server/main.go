@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/denizsincar29/yastation/internal/app"
@@ -34,7 +35,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Не удалось подключиться: %v\nЕсли это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth", err)
 	}
-	log.Printf("Подключено. Колонок найдено: %d", len(client.Speakers))
+	names := make([]string, len(client.Speakers))
+	for i, d := range client.Speakers {
+		names[i] = d.Name
+	}
+	log.Printf("Подключено. Колонок найдено: %d (%s)", len(client.Speakers), strings.Join(names, ", "))
 
 	a := app.New(client)
 	defer a.Close()
