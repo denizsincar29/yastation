@@ -93,15 +93,7 @@ func (c *Client) loadDevices() error {
 
 	var speakers []Device
 	for _, h := range data.Households {
-		for _, r := range h.Rooms {
-			for _, d := range r.Devices {
-				d.RoomName, d.HouseName = r.Name, h.Name
-				if d.IsSpeaker() {
-					speakers = append(speakers, d)
-				}
-			}
-		}
-		for _, d := range h.Devices {
+		for _, d := range h.All {
 			d.HouseName = h.Name
 			if d.IsSpeaker() {
 				speakers = append(speakers, d)
@@ -136,7 +128,7 @@ func (c *Client) loadScenarios() error {
 func (c *Client) findScenarioByTrigger(trigger string) string {
 	for _, s := range c.Scenarios {
 		for _, t := range s.Triggers {
-			if t.Value.Phrase == trigger {
+			if t.Trigger.Value == trigger {
 				return s.ID
 			}
 		}
@@ -145,8 +137,7 @@ func (c *Client) findScenarioByTrigger(trigger string) string {
 }
 
 // ensureScenario makes sure a scenario matching `build` exists for `dev`,
-// creating one (via v4 scenarios) or updating it in place if the phrase
-// changed. Returns the scenario id.
+// creating one (via v4 scenarios) if it doesn't. Returns the scenario id.
 func (c *Client) ensureScenario(dev Device, name string, build Scenario) (string, error) {
 	trigger := dev.Trigger()
 	if id := c.findScenarioByTrigger(trigger); id != "" {
@@ -158,19 +149,18 @@ func (c *Client) ensureScenario(dev Device, name string, build Scenario) (string
 		return "", err
 	}
 	var data struct {
-		Status   string `json:"status"`
-		Scenario struct {
-			ID string `json:"id"`
-		} `json:"scenario"`
+		Status     string `json:"status"`
+		ScenarioID string `json:"scenario_id"`
 	}
 	if err := decodeJSONClose(resp, &data); err != nil {
 		return "", err
 	}
-	if data.Status != "ok" || data.Scenario.ID == "" {
+	if data.Status != "ok" || data.ScenarioID == "" {
 		return "", fmt.Errorf("не удалось создать сценарий-триггер для колонки %q", dev.Name)
 	}
+	build.ID = data.ScenarioID
 	c.Scenarios = append(c.Scenarios, build)
-	return data.Scenario.ID, nil
+	return data.ScenarioID, nil
 }
 
 // runScenarioByID fires a scenario's actions immediately, without anyone
