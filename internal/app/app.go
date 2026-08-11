@@ -115,28 +115,39 @@ func station(args []string) (string, []string) {
 
 // notifyVolume extracts an optional "volume=X" argument for /notify,
 // defaulting to 0.4 (matching the reference behaviour) when absent.
+// notifyVolume extracts an optional "volume=X" argument for /notify,
+// defaulting to 4 (out of 0..10, matching the reference default of 40%)
+// when absent.
 func notifyVolume(args []string) (float64, []string) {
 	for i, a := range args {
 		if strings.HasPrefix(a, "volume=") {
 			v, err := strconv.ParseFloat(strings.TrimPrefix(a, "volume="), 64)
 			rest := append(append([]string{}, args[:i]...), args[i+1:]...)
 			if err != nil {
-				return 0.4, rest
+				return 4, rest
 			}
 			return v, rest
 		}
 	}
-	return 0.4, args
+	return 4, args
 }
 
 func (a *App) registerCommands() {
 	d := a.Dispatcher
 
+	// Free text with no "/" is TTS. A leading "- " is a voice-command
+	// alias for /cmd, e.g. "- какая погода" instead of "/cmd какая погода".
 	d.Default = func(ctx context.Context, text string) (string, error) {
+		if rest, ok := strings.CutPrefix(text, "- "); ok {
+			if err := a.Client.Command("", rest); err != nil {
+				return "", err
+			}
+			return "Алиса услышала команду: " + rest, nil
+		}
 		if err := a.Client.Say("", text); err != nil {
 			return "", err
 		}
-		return "[сказано] " + text, nil
+		return "Алиса сказала: " + text, nil
 	}
 
 	d.Handle("Сказать текст через станцию (TTS)", func(ctx context.Context, args []string) (string, error) {
@@ -148,7 +159,7 @@ func (a *App) registerCommands() {
 		if err := a.Client.Say(station, text); err != nil {
 			return "", err
 		}
-		return "[сказано] " + text, nil
+		return "Алиса сказала: " + text, nil
 	}, "say", "s", "tts")
 
 	d.Handle("Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается", func(ctx context.Context, args []string) (string, error) {
@@ -178,10 +189,10 @@ func (a *App) registerCommands() {
 			return fmt.Sprintf("[уведомление, громкость %v] %s", volume, text), nil
 		}, "notify", "n")
 
-	d.Handle("Громкость 0..1, например /volume 0.3", func(ctx context.Context, args []string) (string, error) {
+	d.Handle("Громкость 0..10, например /volume 3", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
 		if len(rest) != 1 {
-			return "", fmt.Errorf("нужно ровно одно число: /volume 0.3")
+			return "", fmt.Errorf("нужно ровно одно число: /volume 3")
 		}
 		level, err := strconv.ParseFloat(rest[0], 64)
 		if err != nil {

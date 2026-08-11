@@ -37,16 +37,19 @@ func main() {
 	var commands stringList
 	var scriptPath string
 	var forceInteractive bool
+	var configPath string
 	flag.Var(&commands, "c", "выполнить одну команду и продолжить (можно указывать несколько раз), например -c \"/say привет\"")
 	flag.StringVar(&scriptPath, "e", "", "выполнить скрипт файлом (как /execute путь) и выйти")
 	flag.BoolVar(&forceInteractive, "i", false, "остаться в интерактивном REPL после выполнения -c/-e")
+	flag.StringVar(&configPath, "config", os.Getenv("YASTATION_COMMANDS_FILE"), "путь к JSON со своими командами (см. examples/commands.json); по умолчанию из YASTATION_COMMANDS_FILE")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "использование:")
 		fmt.Fprintln(os.Stderr, "  yastation                          интерактивный REPL")
 		fmt.Fprintln(os.Stderr, "  yastation \"текст\"                   сказать текст один раз и выйти")
-		fmt.Fprintln(os.Stderr, "  yastation -c \"/volume 0.3\" -c \"/say привет\"   несколько команд подряд, потом выход")
+		fmt.Fprintln(os.Stderr, "  yastation -c \"/volume 3\" -c \"/say привет\"   несколько команд подряд, потом выход")
 		fmt.Fprintln(os.Stderr, "  yastation -e script.txt             выполнить скрипт и выйти")
 		fmt.Fprintln(os.Stderr, "  yastation -c \"...\" -i               выполнить и остаться в REPL")
+		fmt.Fprintln(os.Stderr, "  yastation -config commands.json     подключить свои команды")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -71,6 +74,19 @@ func main() {
 
 	a := app.New(client)
 	defer a.Close()
+
+	if configPath != "" {
+		cfg, err := app.LoadCustomCommandConfig(configPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Не смог загрузить свои команды:", err)
+			os.Exit(1)
+		}
+		if err := a.RegisterCustomCommands(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "Ошибка в конфиге команд:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Загружено своих команд: %d (из %s)\n", len(cfg.Commands), configPath)
+	}
 
 	ctx := context.Background()
 
