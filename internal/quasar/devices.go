@@ -97,14 +97,26 @@ type Scenario struct {
 }
 
 // ScenarioTrigger matches the wire shape exactly: a single "trigger" key
-// wrapping type+value, where value is the plain phrase string.
+// wrapping type+value. Value is `any`, not a fixed string, because
+// non-voice triggers (time-based, etc — real accounts have these from
+// the official app, not just the ones this project creates) carry
+// non-string values here; only voice triggers have a plain string
+// phrase. See TriggerPhrase().
 type ScenarioTrigger struct {
 	Trigger ScenarioTriggerBody `json:"trigger"`
 }
 
 type ScenarioTriggerBody struct {
 	Type  string `json:"type"`
-	Value string `json:"value"`
+	Value any    `json:"value"`
+}
+
+// TriggerPhrase returns the trigger's value as a string, and false if
+// this trigger isn't a plain-string voice trigger (e.g. a time trigger,
+// whose value is an object).
+func (t ScenarioTrigger) TriggerPhrase() (string, bool) {
+	s, ok := t.Trigger.Value.(string)
+	return s, ok
 }
 
 type ScenarioStep struct {

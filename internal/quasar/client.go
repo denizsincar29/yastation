@@ -124,11 +124,12 @@ func (c *Client) loadScenarios() error {
 }
 
 // findScenarioByTrigger returns the scenario id already wired up to the
-// given trigger phrase, if any.
+// given trigger phrase, if any. Non-voice triggers (whose value isn't a
+// plain string) are skipped rather than causing an error.
 func (c *Client) findScenarioByTrigger(trigger string) string {
 	for _, s := range c.Scenarios {
 		for _, t := range s.Triggers {
-			if t.Trigger.Value == trigger {
+			if phrase, ok := t.TriggerPhrase(); ok && phrase == trigger {
 				return s.ID
 			}
 		}
