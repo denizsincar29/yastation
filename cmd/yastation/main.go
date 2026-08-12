@@ -50,6 +50,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  yastation -e script.txt             выполнить скрипт и выйти")
 		fmt.Fprintln(os.Stderr, "  yastation -c \"...\" -i               выполнить и остаться в REPL")
 		fmt.Fprintln(os.Stderr, "  yastation -config commands.json     подключить свои команды")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  /команда?                          справка по одной команде (например /timer?)")
+		fmt.Fprintln(os.Stderr, "  встроенные шаблонные команды (play/pause/timer/...) читаются из")
+		fmt.Fprintln(os.Stderr, "  "+app.ConfigFilePath()+" — при первом запуске файл создаётся из config.json.default,")
+		fmt.Fprintln(os.Stderr, "  дальше можно редактировать/удалять команды прямо там")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -74,6 +79,22 @@ func main() {
 
 	a := app.New(client)
 	defer a.Close()
+
+	defaultsPath := app.ConfigFilePath()
+	if err := app.EnsureConfigFile(defaultsPath); err != nil {
+		fmt.Fprintln(os.Stderr, "Не смог создать", defaultsPath, ":", err)
+		os.Exit(1)
+	}
+	defaultsCfg, err := app.LoadCustomCommandConfig(defaultsPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Не смог загрузить", defaultsPath, ":", err)
+		os.Exit(1)
+	}
+	if err := a.RegisterCustomCommands(defaultsCfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Ошибка в", defaultsPath, ":", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Загружено стандартных команд: %d (из %s)\n", len(defaultsCfg.Commands), defaultsPath)
 
 	if configPath != "" {
 		cfg, err := app.LoadCustomCommandConfig(configPath)

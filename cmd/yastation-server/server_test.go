@@ -161,7 +161,7 @@ func TestHandleCommandInvalidJSON(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader("{not json"))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -176,7 +176,7 @@ func TestHandleCommandMissingLineAndText(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -191,7 +191,7 @@ func TestHandleCommandDefaultAppSuccess(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет","station":"Кухня"}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -216,7 +216,7 @@ func TestHandleCommandXStationHeaderFillsStation(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет"}`))
 	req.Header.Set("X-Station", "Кухня")
 	rec := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestHandleCommandAsCommandFlag(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"включи радио","as_command":true}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -266,7 +266,7 @@ func TestHandleCommandBYOTFailsClosedOnBadToken(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет"}`))
 	req.Header.Set("X-Yandex-Token", "definitely-not-a-real-token")
 	rec := httptest.NewRecorder()

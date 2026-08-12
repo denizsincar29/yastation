@@ -20,21 +20,21 @@ import (
 // StationAPI is the subset of *quasar.Client that the command layer
 // needs. Defined as an interface here so tests can use a fake instead of
 // hitting the real Yandex API.
+// Play, Pause, Timer, Weather, Reminder and friends used to live here too,
+// each as its own typed method. In practice every one of them just built
+// a fixed Russian phrase ("продолжить", "поставь таймер на N минут ...")
+// and pushed it through Command — there was no protocol-level reason for
+// them to be Go methods instead of data. They're now template-based
+// commands loaded from config.json (see config.json.default and
+// DefaultCommandsConfig) the same way a user's own --config commands.json
+// is, and are registered through Command/Say below like any other custom
+// command. Volume stays a real method: /volume and /notify need the
+// numeric parsing/clamping that a plain text substitution can't do.
 type StationAPI interface {
 	Say(station, text string) error
 	Command(station, text string) error
 	Notify(station, text string, volume float64) error
 	Volume(station string, level float64) error
-	Play(station string) error
-	Pause(station string) error
-	Stop(station string) error
-	Next(station string) error
-	Previous(station string) error
-	Timer(station string, minutes int, label string) error
-	Alarm(station, atTime, label string) error
-	Reminder(station, text, when string) error
-	Weather(station string) error
-	News(station string) error
 	RunScenario(name string) error
 	ListScenarios() []string
 	Diagnostics() (string, error)
@@ -150,7 +150,7 @@ func (a *App) registerCommands() {
 		return "Алиса сказала: " + text, nil
 	}
 
-	d.Handle("Сказать текст через станцию (TTS)", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Основное", "Сказать текст через станцию (TTS)", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
 		text := dispatch.Rest(rest)
 		if text == "" {
@@ -162,7 +162,7 @@ func (a *App) registerCommands() {
 		return "Алиса сказала: " + text, nil
 	}, "say", "s", "tts")
 
-	d.Handle("Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Основное", "Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
 		text := dispatch.Rest(rest)
 		if text == "" {
@@ -174,7 +174,7 @@ func (a *App) registerCommands() {
 		return "[команда отправлена] " + text, nil
 	}, "cmd", "c", "ask")
 
-	d.Handle(
+	d.HandleCat("Основное",
 		"Уведомление: громкость (по умолчанию 0.4) + фраза. volume=0.3 в любом месте аргументов, volume=-1 пропустить громкость",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
@@ -189,7 +189,7 @@ func (a *App) registerCommands() {
 			return fmt.Sprintf("[уведомление, громкость %v] %s", volume, text), nil
 		}, "notify", "n")
 
-	d.Handle("Громкость 0..10, например /volume 3", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Плеер", "Громкость 0..10, например /volume 3", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
 		if len(rest) != 1 {
 			return "", fmt.Errorf("нужно ровно одно число: /volume 3")
@@ -204,66 +204,13 @@ func (a *App) registerCommands() {
 		return fmt.Sprintf("[громкость] %v", level), nil
 	}, "volume", "vol")
 
-	simple := func(name, help string, fn func(station string) error) {
-		d.Handle(help, func(ctx context.Context, args []string) (string, error) {
-			st, _ := station(args)
-			if err := fn(st); err != nil {
-				return "", err
-			}
-			return "[" + name + "]", nil
-		}, name)
-	}
-	simple("play", "Продолжить воспроизведение", a.Client.Play)
-	simple("pause", "Пауза", a.Client.Pause)
-	simple("stop", "Остановить", a.Client.Stop)
-	simple("next", "Следующий трек", a.Client.Next)
-	simple("prev", "Предыдущий трек", a.Client.Previous)
-	simple("weather", "Спросить погоду", a.Client.Weather)
-	simple("news", "Включить новости", a.Client.News)
+	// play/pause/stop/next/prev/weather/news/timer/alarm/reminder used to
+	// live here as near-identical little wrappers around Command(). They
+	// now come from config.json (config.json.default), loaded and
+	// registered by the caller (see RegisterCustomCommands) right after
+	// New() returns — same mechanism as a user's own --config commands.
 
-	d.Handle("Таймер: /timer 10 проверить духовку", func(ctx context.Context, args []string) (string, error) {
-		st, rest := station(args)
-		if len(rest) == 0 {
-			return "", fmt.Errorf("нужны минуты: /timer 10 [подпись]")
-		}
-		minutes, err := strconv.Atoi(rest[0])
-		if err != nil {
-			return "", fmt.Errorf("не число минут: %q", rest[0])
-		}
-		label := dispatch.Rest(rest[1:])
-		if err := a.Client.Timer(st, minutes, label); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[таймер на %d мин] %s", minutes, label), nil
-	}, "timer")
-
-	d.Handle("Будильник: /alarm 7:30 [подпись]", func(ctx context.Context, args []string) (string, error) {
-		st, rest := station(args)
-		if len(rest) == 0 {
-			return "", fmt.Errorf("нужно время: /alarm 7:30 [подпись]")
-		}
-		at := rest[0]
-		label := dispatch.Rest(rest[1:])
-		if err := a.Client.Alarm(st, at, label); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[будильник на %s] %s", at, label), nil
-	}, "alarm")
-
-	d.Handle("Напоминание: /reminder завтра купить хлеб", func(ctx context.Context, args []string) (string, error) {
-		st, rest := station(args)
-		if len(rest) < 2 {
-			return "", fmt.Errorf("нужно: /reminder <когда> <что>")
-		}
-		when := rest[0]
-		text := dispatch.Rest(rest[1:])
-		if err := a.Client.Reminder(st, text, when); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[напоминание %s] %s", when, text), nil
-	}, "reminder", "remind")
-
-	d.Handle("Список твоих сценариев умного дома", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Сценарии", "Список твоих сценариев умного дома", func(ctx context.Context, args []string) (string, error) {
 		names := a.Client.ListScenarios()
 		if len(names) == 0 {
 			return "сценариев не найдено", nil
@@ -271,7 +218,7 @@ func (a *App) registerCommands() {
 		return "- " + strings.Join(names, "\n- "), nil
 	}, "scenarios")
 
-	d.Handle("Запустить сценарий по имени: /scenario Вечер", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Сценарии", "Запустить сценарий по имени: /scenario Вечер", func(ctx context.Context, args []string) (string, error) {
 		name := dispatch.Rest(args)
 		if name == "" {
 			return "", fmt.Errorf("нужно имя сценария")
@@ -282,11 +229,11 @@ func (a *App) registerCommands() {
 		return "[сценарий запущен] " + name, nil
 	}, "scenario", "run")
 
-	d.Handle("Диагностика подключения", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Диагностика", "Диагностика подключения", func(ctx context.Context, args []string) (string, error) {
 		return a.Client.Diagnostics()
 	}, "stations", "diag", "diagnostics")
 
-	d.Handle("Периодическая команда: /every 5m /say время отчёта", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Планировщик", "Периодическая команда: /every 5m /say время отчёта", func(ctx context.Context, args []string) (string, error) {
 		if len(args) < 2 {
 			return "", fmt.Errorf("нужно: /every <30s|5m|2h> <команда>")
 		}
@@ -299,7 +246,7 @@ func (a *App) registerCommands() {
 		return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
 	}, "every")
 
-	d.Handle("Разовая команда в HH:MM: /at 7:30 /say доброе утро", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Планировщик", "Разовая команда в HH:MM: /at 7:30 /say доброе утро", func(ctx context.Context, args []string) (string, error) {
 		if len(args) < 2 {
 			return "", fmt.Errorf("нужно: /at <ЧЧ:ММ> <команда>")
 		}
@@ -312,7 +259,7 @@ func (a *App) registerCommands() {
 		return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
 	}, "at")
 
-	d.Handle("Список запланированных команд", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Планировщик", "Список запланированных команд", func(ctx context.Context, args []string) (string, error) {
 		tasks := a.Scheduler.List()
 		if len(tasks) == 0 {
 			return "активных задач нет", nil
@@ -324,19 +271,19 @@ func (a *App) registerCommands() {
 		return strings.Join(lines, "\n"), nil
 	}, "schedules", "jobs")
 
-	d.Handle("Отменить все запланированные команды", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Планировщик", "Отменить все запланированные команды", func(ctx context.Context, args []string) (string, error) {
 		a.Scheduler.CancelAll()
 		return "[все запланированные команды отменены]", nil
 	}, "unschedule_all", "cancel_all")
 
-	d.Handle("Выполнить команды построчно из файла: /execute examples/morning.txt", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Планировщик", "Выполнить команды построчно из файла: /execute examples/morning.txt", func(ctx context.Context, args []string) (string, error) {
 		if len(args) != 1 {
 			return "", fmt.Errorf("нужен ровно один путь к файлу")
 		}
 		return a.executeScript(ctx, args[0])
 	}, "execute")
 
-	d.Handle("Список команд", func(ctx context.Context, args []string) (string, error) {
+	d.HandleCat("Справка", "Список команд (по /команда? — справка по одной)", func(ctx context.Context, args []string) (string, error) {
 		return d.Help(), nil
 	}, "help", "h", "?")
 }
