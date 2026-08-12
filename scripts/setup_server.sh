@@ -71,17 +71,37 @@ green "✔  Использую порт: ${PORT}"
 
 ask DOMAIN "Поддомен для Caddy (пусто — пропустить)" ""
 
-DEFAULT_TOKEN_FILE="${HOME}/.config/yastation/tokens.json"
-ask TOKEN_FILE "Файл токенов Яндекс-аккаунта" "${DEFAULT_TOKEN_FILE}"
+echo ""
+bold "── Свой Яндекс-аккаунт или только чужие токены? ────────────────"
+echo "Сервер может держать свой предавторизованный Яндекс-аккаунт (обычный"
+echo "режим) — тогда запросы без X-Yandex-Token идут в него. Либо можно"
+echo "поднять его вообще без своего аккаунта (BYOT-only) — тогда каждый"
+echo "запрос обязан нести собственный X-Yandex-Token, авторизация не нужна."
+read -rp "Поднять без своего аккаунта, только BYOT? [y/N]: " byot_only
+BYOT_ONLY=false
+[[ "${byot_only,,}" == "y" ]] && BYOT_ONLY=true
+
+TOKEN_FILE=""
+if ! $BYOT_ONLY; then
+  DEFAULT_TOKEN_FILE="${HOME}/.config/yastation/tokens.json"
+  ask TOKEN_FILE "Файл токенов Яндекс-аккаунта" "${DEFAULT_TOKEN_FILE}"
+fi
 
 echo ""
+bold "── Токен доступа к самому HTTP API ──────────────────────────────"
+echo "YASTATION_HTTP_TOKEN — это НЕ токен Яндекс-аккаунта и не имеет к нему"
+echo "отношения (тот, из BYOT, передаётся отдельно заголовком X-Yandex-Token"
+echo "на каждый запрос). Это просто ключ, которым сам сервер закрыт от"
+echo "посторонних: клиент обязан слать 'Authorization: Bearer <этот токен>',"
+echo "иначе получает 401 — даже в BYOT-режиме, иначе кто угодно из интернета"
+echo "сможет дёргать /command чужими токенами через твой сервер."
 if command -v openssl >/dev/null 2>&1; then
   DEFAULT_HTTP_TOKEN="$(openssl rand -hex 32)"
 else
   DEFAULT_HTTP_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 fi
-echo "Сгенерирован случайный токен для доступа к API — просто нажми Enter,"
-echo "чтобы использовать его, или впиши свой."
+echo "Сгенерирован случайный — просто нажми Enter, чтобы использовать его,"
+echo "или впиши свой."
 ask HTTP_TOKEN "YASTATION_HTTP_TOKEN" "${DEFAULT_HTTP_TOKEN}"
 
 echo ""
@@ -102,7 +122,11 @@ if $WRITE_ENV; then
     echo "# $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     echo "YASTATION_HTTP_ADDR=:${PORT}"
     echo "YASTATION_HTTP_TOKEN=${HTTP_TOKEN}"
-    echo "YASTATION_TOKEN_FILE=${TOKEN_FILE}"
+    if $BYOT_ONLY; then
+      echo "YASTATION_BYOT_ONLY=1"
+    else
+      echo "YASTATION_TOKEN_FILE=${TOKEN_FILE}"
+    fi
     if [[ "${use_custom,,}" == "y" ]]; then
       echo "YASTATION_COMMANDS_FILE=${ROOT_DIR}/examples/commands.json"
     fi
@@ -117,7 +141,8 @@ else
   set +a
   PORT="${YASTATION_HTTP_ADDR#*:}"
   HTTP_TOKEN="${YASTATION_HTTP_TOKEN}"
-  TOKEN_FILE="${YASTATION_TOKEN_FILE:-${DEFAULT_TOKEN_FILE}}"
+  [[ -n "${YASTATION_BYOT_ONLY:-}" ]] && BYOT_ONLY=true
+  TOKEN_FILE="${YASTATION_TOKEN_FILE:-${HOME}/.config/yastation/tokens.json}"
 fi
 
 # ── Сборка ──────────────────────────────────────────────────────
@@ -128,16 +153,21 @@ mkdir -p "${BIN_DIR}"
 (cd "${ROOT_DIR}" && go build -o "${BIN_PATH}" ./cmd/yastation-server)
 green "✔  Собрано: ${BIN_PATH}"
 
-# ── Авторизация в Яндексе, если ещё не пройдена ──────────────────
+# ── Авторизация в Яндексе, если ещё не пройдена (пропускается в BYOT-only) ──
 
-if [[ ! -f "${TOKEN_FILE}" ]]; then
+if $BYOT_ONLY; then
   echo ""
-  yellow "ℹ  Файл токенов ${TOKEN_FILE} не найден — нужна разовая QR-авторизация."
-  read -rp "   Авторизоваться сейчас? [Y/n]: " do_auth
-  if [[ "${do_auth,,}" != "n" ]]; then
-    (cd "${ROOT_DIR}" && YASTATION_TOKEN_FILE="${TOKEN_FILE}" go run ./cmd/yastation-auth)
-  else
-    yellow "   Не забудь потом: YASTATION_TOKEN_FILE=${TOKEN_FILE} go run ./cmd/yastation-auth"
+  green "✔  BYOT-only: свой аккаунт не нужен, авторизация пропущена."
+else
+  if [[ ! -f "${TOKEN_FILE}" ]]; then
+    echo ""
+    yellow "ℹ  Файл токенов ${TOKEN_FILE} не найден — нужна разовая QR-авторизация."
+    read -rp "   Авторизоваться сейчас? [Y/n]: " do_auth
+    if [[ "${do_auth,,}" != "n" ]]; then
+      (cd "${ROOT_DIR}" && YASTATION_TOKEN_FILE="${TOKEN_FILE}" go run ./cmd/yastation-auth)
+    else
+      yellow "   Не забудь потом: YASTATION_TOKEN_FILE=${TOKEN_FILE} go run ./cmd/yastation-auth"
+    fi
   fi
 fi
 
