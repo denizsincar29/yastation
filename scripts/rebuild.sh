@@ -41,8 +41,11 @@ fi
 
 echo ""
 bold "── git pull ──────────────────────────────────────────────────"
-if [[ -n "$(git status --porcelain)" ]]; then
-  err "есть незакоммиченные изменения в ${ROOT_DIR} — сначала разберись (git status), потом повтори"
+# --untracked-files=no: не мешают untracked-файлы вроде .env (секреты,
+# специально не в git). Блокируем pull только если есть локальные
+# изменения в отслеживаемых файлах — их и правда нельзя молча затирать.
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  err "есть незакоммиченные изменения в отслеживаемых файлах ${ROOT_DIR} — сначала разберись (git status), потом повтори"
   exit 1
 fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
