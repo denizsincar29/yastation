@@ -16,6 +16,17 @@
 //     themselves. Clients built this way are cached briefly per token
 //     (see tokenClientCache) so repeated requests don't redo the login
 //     handshake every time.
+//
+// The two auth modes above are about *whose Yandex account* a request
+// runs against. That's orthogonal to YASTATION_HTTP_TOKEN, which is this
+// server's own API key (checked via "Authorization: Bearer ...") so
+// random callers can't hit your HTTP endpoint at all — set it any time
+// the server is reachable from outside localhost, in either auth mode,
+// BYOT included.
+//
+// Set YASTATION_BYOT_ONLY=1 to skip the default account entirely (no
+// yastation-auth/tokens.json needed) and require every request to bring
+// its own X-Yandex-Token.
 package main
 
 import (
@@ -42,7 +53,18 @@ func main() {
 	if token == "" {
 		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
 		log.Println("Задайте переменную окружения, если сервер смотрит наружу, а не только в localhost.")
+		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
 	}
+
+	defaultsPath := app.ConfigFilePath()
+	if err := app.EnsureConfigFile(defaultsPath); err != nil {
+		log.Fatalf("Не смог создать %s: %v", defaultsPath, err)
+	}
+	defaultsCfg, err := app.LoadCustomCommandConfig(defaultsPath)
+	if err != nil {
+		log.Fatalf("Не смог загрузить %s: %v", defaultsPath, err)
+	}
+	log.Printf("Загружено стандартных команд: %d (из %s)", len(defaultsCfg.Commands), defaultsPath)
 
 	var customCfg *app.CustomCommandConfig
 	if p := os.Getenv("YASTATION_COMMANDS_FILE"); p != "" {
@@ -54,25 +76,37 @@ func main() {
 		log.Printf("Загружено своих команд: %d (из %s)", len(cfg.Commands), p)
 	}
 
-	log.Println("Подключаюсь к Яндекс Станции...")
-	client, err := quasar.Connect()
-	if err != nil {
-		log.Fatalf("Не удалось подключиться: %v\nЕсли это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth", err)
-	}
-	names := make([]string, len(client.Speakers))
-	for i, d := range client.Speakers {
-		names[i] = d.Name
-	}
-	log.Printf("Подключено. Колонок найдено: %d (%s)", len(client.Speakers), strings.Join(names, ", "))
+	// byotOnly: no default account at all — every request must bring its
+	// own X-Yandex-Token. Useful when this server exists purely to relay
+	// other people's tokens and you don't want/need a Yandex account of
+	// your own sitting on the box (no yastation-auth run needed either).
+	byotOnly := os.Getenv("YASTATION_BYOT_ONLY") != ""
 
-	a := buildApp(client, customCfg)
-	defer a.Close()
+	var a *app.App
+	if byotOnly {
+		log.Println("YASTATION_BYOT_ONLY=1 — без своего аккаунта, каждый запрос должен нести X-Yandex-Token")
+	} else {
+		log.Println("Подключаюсь к Яндекс Станции...")
+		client, err := quasar.Connect()
+		if err != nil {
+			log.Fatalf("Не удалось подключиться: %v\n"+
+				"Если это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth\n"+
+				"Если сервер нужен только в режиме bring-your-own-token, без своего аккаунта — задайте YASTATION_BYOT_ONLY=1", err)
+		}
+		names := make([]string, len(client.Speakers))
+		for i, d := range client.Speakers {
+			names[i] = d.Name
+		}
+		log.Printf("Подключено. Колонок найдено: %d (%s)", len(client.Speakers), strings.Join(names, ", "))
+		a = buildApp(client, defaultsCfg, customCfg)
+		defer a.Close()
+	}
 
 	tokenClients := newTokenClientCache(20 * time.Minute)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, customCfg))
+	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, defaultsCfg, customCfg))
 	mux.HandleFunc("GET /schedules", handleSchedules(a))
 	mux.HandleFunc("GET /stations", handleStations(tokenClients))
 
@@ -82,8 +116,13 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
-func buildApp(client *quasar.Client, customCfg *app.CustomCommandConfig) *app.App {
+func buildApp(client *quasar.Client, defaultsCfg, customCfg *app.CustomCommandConfig) *app.App {
 	a := app.New(client)
+	if defaultsCfg != nil {
+		if err := a.RegisterCustomCommands(defaultsCfg); err != nil {
+			log.Fatalf("Ошибка в конфиге стандартных команд: %v", err)
+		}
+	}
 	if customCfg != nil {
 		if err := a.RegisterCustomCommands(customCfg); err != nil {
 			log.Fatalf("Ошибка в конфиге команд: %v", err)
@@ -214,7 +253,7 @@ type commandResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, customCfg *app.CustomCommandConfig) http.HandlerFunc {
+func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req commandRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -253,7 +292,7 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, customCf
 				writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "не удалось войти с этим токеном: " + err.Error()})
 				return
 			}
-			tmpApp := buildApp(client, customCfg)
+			tmpApp := buildApp(client, defaultsCfg, customCfg)
 			defer tmpApp.Close()
 			out, err := tmpApp.Execute(ctx, line)
 			if err != nil {
@@ -261,6 +300,11 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, customCf
 				return
 			}
 			writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
+			return
+		}
+
+		if defaultApp == nil {
+			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (YASTATION_BYOT_ONLY=1) — передайте свой X-Yandex-Token"})
 			return
 		}
 
@@ -310,6 +354,10 @@ func handleStations(tokenClients *tokenClientCache) http.HandlerFunc {
 
 func handleSchedules(a *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if a == nil {
+			writeJSON(w, http.StatusOK, []struct{}{})
+			return
+		}
 		tasks := a.Scheduler.List()
 		type taskJSON struct {
 			ID          int    `json:"id"`

@@ -33,6 +33,34 @@ func TestBindCustomParamsMissingArgsErrors(t *testing.T) {
 	}
 }
 
+func TestBindCustomParamsOptionalTrailingParam(t *testing.T) {
+	values, err := bindCustomParams([]string{"minutes", "label?"}, []string{"10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["minutes"] != "10" || values["label"] != "" {
+		t.Fatalf("values=%v", values)
+	}
+
+	values2, err := bindCustomParams([]string{"minutes", "label?"}, []string{"10", "чайник", "кипит"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values2["minutes"] != "10" || values2["label"] != "чайник кипит" {
+		t.Fatalf("values2=%v", values2)
+	}
+}
+
+func TestBindCustomParamsNoParams(t *testing.T) {
+	values, err := bindCustomParams(nil, []string{"игнорируется"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 0 {
+		t.Fatalf("values=%v", values)
+	}
+}
+
 func TestRenderCustomTemplate(t *testing.T) {
 	got := renderCustomTemplate(`Say this exact words in English: "$text"`, map[string]string{"text": "hello there"})
 	want := `Say this exact words in English: "hello there"`
@@ -56,10 +84,12 @@ func TestValidateCustomCommandDef(t *testing.T) {
 	}{
 		{"valid", CustomCommandDef{Name: "english", Params: []string{"text"}, Template: "$text"}, false},
 		{"no name", CustomCommandDef{Params: []string{"text"}, Template: "$text"}, true},
-		{"no params", CustomCommandDef{Name: "x", Template: "$text"}, true},
+		{"no params ok (fixed phrase)", CustomCommandDef{Name: "x", Template: "продолжить"}, false},
 		{"no template", CustomCommandDef{Name: "x", Params: []string{"text"}}, true},
 		{"bad kind", CustomCommandDef{Name: "x", Params: []string{"text"}, Template: "t", Kind: "shout"}, true},
 		{"dup params", CustomCommandDef{Name: "x", Params: []string{"a", "a"}, Template: "t"}, true},
+		{"trailing optional ok", CustomCommandDef{Name: "x", Params: []string{"a", "b?"}, Template: "t"}, false},
+		{"required after optional", CustomCommandDef{Name: "x", Params: []string{"a?", "b"}, Template: "t"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

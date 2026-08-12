@@ -1,0 +1,85 @@
+{
+  "commands": [
+    {
+      "name": "play",
+      "help": "Продолжить воспроизведение",
+      "params": [],
+      "template": "продолжить",
+      "kind": "command",
+      "category": "Плеер"
+    },
+    {
+      "name": "pause",
+      "help": "Пауза",
+      "params": [],
+      "template": "пауза",
+      "kind": "command",
+      "category": "Плеер"
+    },
+    {
+      "name": "stop",
+      "help": "Остановить",
+      "params": [],
+      "template": "останови",
+      "kind": "command",
+      "category": "Плеер"
+    },
+    {
+      "name": "next",
+      "help": "Следующий трек",
+      "params": [],
+      "template": "следующий трек",
+      "kind": "command",
+      "category": "Плеер"
+    },
+    {
+      "name": "prev",
+      "help": "Предыдущий трек",
+      "params": [],
+      "template": "прошлый трек",
+      "kind": "command",
+      "category": "Плеер"
+    },
+    {
+      "name": "weather",
+      "help": "Спросить погоду",
+      "params": [],
+      "template": "какая погода",
+      "kind": "command",
+      "category": "Информация"
+    },
+    {
+      "name": "news",
+      "help": "Включить новости",
+      "params": [],
+      "template": "включи новости",
+      "kind": "command",
+      "category": "Информация"
+    },
+    {
+      "name": "timer",
+      "help": "Таймер: /timer 10 проверить духовку",
+      "params": ["minutes", "label?"],
+      "template": "поставь таймер на $minutes минут $label",
+      "kind": "command",
+      "category": "Напоминания"
+    },
+    {
+      "name": "alarm",
+      "help": "Будильник: /alarm 7:30 [подпись]",
+      "params": ["at", "label?"],
+      "template": "поставь будильник на $at $label",
+      "kind": "command",
+      "category": "Напоминания"
+    },
+    {
+      "name": "reminder",
+      "aliases": ["remind"],
+      "help": "Напоминание: /reminder завтра купить хлеб",
+      "params": ["when", "text"],
+      "template": "напомни $when: $text",
+      "kind": "command",
+      "category": "Напоминания"
+    }
+  ]
+}

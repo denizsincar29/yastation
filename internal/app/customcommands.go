@@ -17,14 +17,26 @@ import (
 //	  "help": "Сказать фразу по-английски: /english текст",
 //	  "params": ["text"],
 //	  "template": "Say this exact words in English: \"$text\"",
-//	  "kind": "command"
+//	  "kind": "command",
+//	  "category": "Свои команды"
 //	}
 //
 // All params except the last must be a single word; the last one greedily
 // captures the rest of the line (so "text" above can contain spaces).
+// A param name ending in "?" (e.g. "label?") is optional — it and every
+// param after it may be left unset, and empty params render as "" in the
+// template. Only trailing params may be optional. params may be empty
+// entirely, for a fixed no-argument command (e.g. "params": [],
+// "template": "продолжить").
+//
 // Template placeholders are "$paramName", substituted from the bound
-// params. Kind is "command" (default — sent as if spoken to Alice, like
-// /cmd) or "say" (sent as flat TTS, like /say).
+// params (surrounding whitespace left over from an unset optional param
+// is trimmed). Kind is "command" (default — sent as if spoken to Alice,
+// like /cmd) or "say" (sent as flat TTS, like /say). Category groups the
+// command in /help; defaults to "Свои команды" if omitted — this is what
+// distinguishes a user's own commands.json from yastation's own built-in
+// config.json (see config.json.default), which sets an explicit category
+// per command ("Плеер", "Напоминания", ...).
 type CustomCommandDef struct {
 	Name     string   `json:"name"`
 	Aliases  []string `json:"aliases,omitempty"`
@@ -32,6 +44,7 @@ type CustomCommandDef struct {
 	Params   []string `json:"params"`
 	Template string   `json:"template"`
 	Kind     string   `json:"kind,omitempty"`
+	Category string   `json:"category,omitempty"`
 }
 
 // CustomCommandConfig is the top-level shape of the JSON config file.
@@ -72,9 +85,6 @@ func validateCustomCommandDef(def CustomCommandDef) error {
 	if def.Name == "" {
 		return fmt.Errorf("нужно имя (name)")
 	}
-	if len(def.Params) == 0 {
-		return fmt.Errorf("нужен хотя бы один параметр (params)")
-	}
 	if def.Template == "" {
 		return fmt.Errorf("нужен шаблон (template)")
 	}
@@ -82,14 +92,21 @@ func validateCustomCommandDef(def CustomCommandDef) error {
 		return fmt.Errorf(`kind должен быть "command" или "say", получено %q`, def.Kind)
 	}
 	seen := map[string]bool{}
+	sawOptional := false
 	for _, p := range def.Params {
-		if p == "" {
+		if p == "" || p == "?" {
 			return fmt.Errorf("пустое имя параметра")
 		}
-		if seen[p] {
-			return fmt.Errorf("повторяющийся параметр %q", p)
+		name := strings.TrimSuffix(p, "?")
+		if seen[name] {
+			return fmt.Errorf("повторяющийся параметр %q", name)
 		}
-		seen[p] = true
+		seen[name] = true
+		if strings.HasSuffix(p, "?") {
+			sawOptional = true
+		} else if sawOptional {
+			return fmt.Errorf("обязательный параметр %q идёт после необязательного — необязательные (с ?) должны быть последними", name)
+		}
 	}
 	return nil
 }
@@ -98,16 +115,21 @@ func (a *App) registerCustomCommand(def CustomCommandDef) {
 	names := append([]string{def.Name}, def.Aliases...)
 	help := def.Help
 	if help == "" {
-		help = "Своя команда: /" + def.Name + " " + strings.Join(def.Params, " ")
+		params := strings.TrimSuffix(strings.Join(def.Params, " "), "?")
+		help = strings.TrimSpace("Своя команда: /" + def.Name + " " + params)
+	}
+	category := def.Category
+	if category == "" {
+		category = "Свои команды"
 	}
 
-	a.Dispatcher.Handle(help, func(ctx context.Context, args []string) (string, error) {
+	a.Dispatcher.HandleCat(category, help, func(ctx context.Context, args []string) (string, error) {
 		st, rest := station(args)
 		values, err := bindCustomParams(def.Params, rest)
 		if err != nil {
 			return "", err
 		}
-		phrase := renderCustomTemplate(def.Template, values)
+		phrase := strings.TrimSpace(renderCustomTemplate(def.Template, values))
 
 		var sendErr error
 		if def.Kind == "say" {
@@ -122,19 +144,36 @@ func (a *App) registerCustomCommand(def CustomCommandDef) {
 	}, names...)
 }
 
-// bindCustomParams binds args positionally to params: every param except
-// the last takes exactly one word, the last one takes everything left
+// bindCustomParams binds args positionally to params. Every param except
+// the last takes exactly one word; the last one takes everything left
 // (joined with spaces), so a final free-text argument can contain spaces.
+// A param name ending in "?" is optional (validateCustomCommandDef
+// guarantees only trailing params carry it) — if there aren't enough args
+// to reach it, it's bound to "" instead of erroring.
 func bindCustomParams(params, args []string) (map[string]string, error) {
-	if len(args) < len(params) {
-		return nil, fmt.Errorf("нужно параметров: %d (%s), дано: %d", len(params), strings.Join(params, ", "), len(args))
+	var required []string
+	for _, p := range params {
+		if !strings.HasSuffix(p, "?") {
+			required = append(required, p)
+		}
 	}
+
 	values := make(map[string]string, len(params))
-	for i, p := range params {
-		if i == len(params)-1 {
-			values[p] = strings.Join(args[i:], " ")
-		} else {
-			values[p] = args[i]
+	for i, raw := range params {
+		name := strings.TrimSuffix(raw, "?")
+		optional := strings.HasSuffix(raw, "?")
+		last := i == len(params)-1
+
+		switch {
+		case i >= len(args):
+			if !optional {
+				return nil, fmt.Errorf("нужно параметров: %d (%s), дано: %d", len(required), strings.Join(required, ", "), len(args))
+			}
+			values[name] = ""
+		case last:
+			values[name] = strings.Join(args[i:], " ")
+		default:
+			values[name] = args[i]
 		}
 	}
 	return values, nil

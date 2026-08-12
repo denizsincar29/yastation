@@ -11,6 +11,13 @@ import (
 func newTestApp() (*App, *fakeStation) {
 	f := &fakeStation{scenarios: []string{"Вечер"}}
 	a := New(f)
+	cfg, err := DefaultCommandsConfig()
+	if err != nil {
+		panic(err)
+	}
+	if err := a.RegisterCustomCommands(cfg); err != nil {
+		panic(err)
+	}
 	return a, f
 }
 
@@ -87,6 +94,10 @@ func TestStationOverrideArg(t *testing.T) {
 }
 
 func TestTimerAndAlarmAndReminder(t *testing.T) {
+	// timer/alarm/reminder are now template-based commands loaded from
+	// config.json.default (DefaultCommandsConfig), so they go through
+	// Command() with a rendered Russian phrase rather than a dedicated
+	// StationAPI method.
 	a, f := newTestApp()
 	defer a.Close()
 	mustExec(t, a, "/timer 10 проверить духовку")
@@ -95,9 +106,9 @@ func TestTimerAndAlarmAndReminder(t *testing.T) {
 
 	calls := f.Calls()
 	want := []string{
-		"timer::10:проверить духовку",
-		"alarm::7:30:",
-		"reminder::завтра:купить хлеб",
+		"cmd::поставь таймер на 10 минут проверить духовку",
+		"cmd::поставь будильник на 7:30",
+		"cmd::напомни завтра: купить хлеб",
 	}
 	if len(calls) != len(want) {
 		t.Fatalf("calls=%v", calls)
@@ -171,7 +182,7 @@ func TestExecuteScript(t *testing.T) {
 
 	mustExec(t, a, "/execute "+path)
 	calls := f.Calls()
-	want := []string{"volume::0.5", "say::доброе утро", "weather:"}
+	want := []string{"volume::0.5", "say::доброе утро", "cmd::какая погода"}
 	if len(calls) != len(want) {
 		t.Fatalf("calls=%v", calls)
 	}
