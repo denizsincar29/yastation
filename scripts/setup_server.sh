@@ -73,16 +73,16 @@ ask DOMAIN "Поддомен для Caddy (пусто — пропустить)"
 
 echo ""
 bold "── Свой Яндекс-аккаунт или только чужие токены? ────────────────"
-echo "Сервер может держать свой предавторизованный Яндекс-аккаунт (обычный"
-echo "режим) — тогда запросы без X-Yandex-Token идут в него. Либо можно"
-echo "поднять его вообще без своего аккаунта (BYOT-only) — тогда каждый"
-echo "запрос обязан нести собственный X-Yandex-Token, авторизация не нужна."
-read -rp "Поднять без своего аккаунта, только BYOT? [y/N]: " byot_only
-BYOT_ONLY=false
-[[ "${byot_only,,}" == "y" ]] && BYOT_ONLY=true
+echo "По умолчанию сервер BYOT-only: своего аккаунта нет, каждый запрос"
+echo "обязан нести собственный X-Yandex-Token — авторизация на сервере не"
+echo "нужна вообще. Можно вместо этого завести свой предавторизованный"
+echo "аккаунт — тогда запросы без X-Yandex-Token пойдут через него."
+read -rp "Завести свой аккаунт (не только BYOT)? [y/N]: " use_default_account
+USE_DEFAULT_ACCOUNT=false
+[[ "${use_default_account,,}" == "y" ]] && USE_DEFAULT_ACCOUNT=true
 
 TOKEN_FILE=""
-if ! $BYOT_ONLY; then
+if $USE_DEFAULT_ACCOUNT; then
   DEFAULT_TOKEN_FILE="${HOME}/.config/yastation/tokens.json"
   ask TOKEN_FILE "Файл токенов Яндекс-аккаунта" "${DEFAULT_TOKEN_FILE}"
 fi
@@ -122,9 +122,8 @@ if $WRITE_ENV; then
     echo "# $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     echo "YASTATION_HTTP_ADDR=:${PORT}"
     echo "YASTATION_HTTP_TOKEN=${HTTP_TOKEN}"
-    if $BYOT_ONLY; then
-      echo "YASTATION_BYOT_ONLY=1"
-    else
+    if $USE_DEFAULT_ACCOUNT; then
+      echo "YASTATION_USE_DEFAULT_ACCOUNT=1"
       echo "YASTATION_TOKEN_FILE=${TOKEN_FILE}"
     fi
     if [[ "${use_custom,,}" == "y" ]]; then
@@ -141,7 +140,7 @@ else
   set +a
   PORT="${YASTATION_HTTP_ADDR#*:}"
   HTTP_TOKEN="${YASTATION_HTTP_TOKEN}"
-  [[ -n "${YASTATION_BYOT_ONLY:-}" ]] && BYOT_ONLY=true
+  [[ -n "${YASTATION_USE_DEFAULT_ACCOUNT:-}" ]] && USE_DEFAULT_ACCOUNT=true
   TOKEN_FILE="${YASTATION_TOKEN_FILE:-${HOME}/.config/yastation/tokens.json}"
 fi
 
@@ -153,11 +152,11 @@ mkdir -p "${BIN_DIR}"
 (cd "${ROOT_DIR}" && go build -o "${BIN_PATH}" ./cmd/yastation-server)
 green "✔  Собрано: ${BIN_PATH}"
 
-# ── Авторизация в Яндексе, если ещё не пройдена (пропускается в BYOT-only) ──
+# ── Авторизация в Яндексе, если ещё не пройдена (пропускается в BYOT) ──
 
-if $BYOT_ONLY; then
+if ! $USE_DEFAULT_ACCOUNT; then
   echo ""
-  green "✔  BYOT-only: свой аккаунт не нужен, авторизация пропущена."
+  green "✔  BYOT: свой аккаунт не нужен, авторизация пропущена."
 else
   if [[ ! -f "${TOKEN_FILE}" ]]; then
     echo ""

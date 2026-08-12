@@ -155,7 +155,14 @@ export YASTATION_HTTP_TOKEN=секрет   # опционально, но нуж
 go run ./cmd/yastation-server
 ```
 
-По умолчанию слушает `:8737` (задаётся `YASTATION_HTTP_ADDR`).
+По умолчанию слушает `:8737` (задаётся `YASTATION_HTTP_ADDR`) и работает
+в BYOT-режиме: своего Яндекс-аккаунта у сервера нет, каждый запрос
+обязан нести собственный `X-Yandex-Token` (см. раздел ниже). Никакой
+`yastation-auth`/`tokens.json` для этого не нужно.
+
+Если хочешь, чтобы сервер ещё и держал свой аккаунт — для запросов без
+`X-Yandex-Token` — заведи его один раз (`go run ./cmd/yastation-auth`) и
+запускай с `YASTATION_USE_DEFAULT_ACCOUNT=1`.
 
 ```bash
 curl -X POST localhost:8737/command \

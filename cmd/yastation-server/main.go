@@ -7,26 +7,26 @@
 // answering (see internal/app.App.Execute).
 //
 // Two auth modes:
-//   - Default: the server's own pre-authenticated account (from
-//     yastation-auth), same for every request.
-//   - "Bring your own token": a request carrying an X-Yandex-Token header
-//     is executed against *that* Yandex account instead — e.g. to run
-//     this once on your own server and let it control a family member's
-//     speaker with their own token, without them needing to run anything
-//     themselves. Clients built this way are cached briefly per token
-//     (see tokenClientCache) so repeated requests don't redo the login
-//     handshake every time.
+//   - "Bring your own token" (default): a request carrying an
+//     X-Yandex-Token header runs against *that* Yandex account. No
+//     account of the server's own is needed — nothing to authorize on
+//     the box, nothing to leak if the box is compromised. Clients built
+//     this way are cached briefly per token (see tokenClientCache) so
+//     repeated requests don't redo the login handshake every time.
+//   - Own account (opt-in via YASTATION_USE_DEFAULT_ACCOUNT=1): the
+//     server also keeps its own pre-authenticated account (from
+//     yastation-auth) and uses it for any request that doesn't carry
+//     X-Yandex-Token.
 //
-// The two auth modes above are about *whose Yandex account* a request
-// runs against. That's orthogonal to YASTATION_HTTP_TOKEN, which is this
+// The auth modes above are about *whose Yandex account* a request runs
+// against. That's orthogonal to YASTATION_HTTP_TOKEN, which is this
 // server's own API key (checked via "Authorization: Bearer ...") so
-// random callers can't hit your HTTP endpoint at all — set it any time
-// the server is reachable from outside localhost, in either auth mode,
-// BYOT included.
-//
-// Set YASTATION_BYOT_ONLY=1 to skip the default account entirely (no
-// yastation-auth/tokens.json needed) and require every request to bring
-// its own X-Yandex-Token.
+// random callers can't hit your HTTP endpoint at all. It's optional (the
+// server logs a warning and runs open without it) but worth setting any
+// time the port is reachable from outside localhost — BYOT-only doesn't
+// make it optional: without it, anyone can use your server as an
+// anonymous relay for *any* Yandex account they hand it a token for,
+// burning your bandwidth and CPU on someone else's traffic.
 package main
 
 import (
@@ -52,7 +52,8 @@ func main() {
 	token := os.Getenv("YASTATION_HTTP_TOKEN")
 	if token == "" {
 		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
-		log.Println("Задайте переменную окружения, если сервер смотрит наружу, а не только в localhost.")
+		log.Println("Задайте переменную окружения, если сервер смотрит наружу, а не только в localhost —")
+		log.Println("иначе кто угодно сможет дёргать /command своими X-Yandex-Token через твой сервер.")
 		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
 	}
 
@@ -76,22 +77,26 @@ func main() {
 		log.Printf("Загружено своих команд: %d (из %s)", len(cfg.Commands), p)
 	}
 
-	// byotOnly: no default account at all — every request must bring its
-	// own X-Yandex-Token. Useful when this server exists purely to relay
-	// other people's tokens and you don't want/need a Yandex account of
-	// your own sitting on the box (no yastation-auth run needed either).
-	byotOnly := os.Getenv("YASTATION_BYOT_ONLY") != ""
+	if legacy := os.Getenv("YASTATION_BYOT_ONLY"); legacy != "" {
+		log.Println("YASTATION_BYOT_ONLY больше не нужен — сервер теперь и так BYOT по умолчанию.")
+		log.Println("Чтобы включить свой аккаунт, задайте YASTATION_USE_DEFAULT_ACCOUNT=1.")
+	}
+
+	// useDefaultAccount: opt-in only. By default the server has no
+	// Yandex account of its own — every request must bring its own
+	// X-Yandex-Token. Set this to also keep a default account (from
+	// yastation-auth) for requests that don't carry one.
+	useDefaultAccount := os.Getenv("YASTATION_USE_DEFAULT_ACCOUNT") != ""
 
 	var a *app.App
-	if byotOnly {
-		log.Println("YASTATION_BYOT_ONLY=1 — без своего аккаунта, каждый запрос должен нести X-Yandex-Token")
+	if !useDefaultAccount {
+		log.Println("BYOT (по умолчанию): своего аккаунта нет, каждый запрос должен нести X-Yandex-Token")
 	} else {
-		log.Println("Подключаюсь к Яндекс Станции...")
+		log.Println("Подключаюсь к Яндекс Станции (свой аккаунт, YASTATION_USE_DEFAULT_ACCOUNT=1)...")
 		client, err := quasar.Connect()
 		if err != nil {
 			log.Fatalf("Не удалось подключиться: %v\n"+
-				"Если это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth\n"+
-				"Если сервер нужен только в режиме bring-your-own-token, без своего аккаунта — задайте YASTATION_BYOT_ONLY=1", err)
+				"Если это первый запуск — авторизуйтесь: go run ./cmd/yastation-auth", err)
 		}
 		names := make([]string, len(client.Speakers))
 		for i, d := range client.Speakers {
@@ -304,7 +309,7 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaults
 		}
 
 		if defaultApp == nil {
-			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (YASTATION_BYOT_ONLY=1) — передайте свой X-Yandex-Token"})
+			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (BYOT по умолчанию) — передайте свой X-Yandex-Token"})
 			return
 		}
 
