@@ -10,13 +10,16 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/denizsincar29/yastation/internal/consoleqr"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
 func main() {
 	sess, err := quasar.LoginViaQR(3*time.Minute, func(link string) {
-		fmt.Println("Откройте ссылку и подтвердите вход в Яндекс:")
-		fmt.Println(link)
+		fmt.Println("Открой ссылку (или отсканируй QR камерой) и подтверди вход в Яндекс.")
+		fmt.Println("Ссылка — отдельной строкой ниже, без ничего перед ней:")
+		fmt.Println()
+		consoleqr.Print(os.Stdout, link)
 		openBrowser(link)
 	})
 	if err != nil {
