@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/denizsincar29/yastation/internal/access"
+	"github.com/denizsincar29/yastation/internal/consoleqr"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
@@ -92,7 +93,9 @@ func cmdAdd(path, presetName string) {
 	fmt.Println()
 
 	sess, err := quasar.LoginViaQR(3*time.Minute, func(link string) {
-		fmt.Println("Ссылка:", link)
+		fmt.Println("Ссылка — отдельной строкой ниже, без ничего перед ней:")
+		fmt.Println()
+		consoleqr.Print(os.Stdout, link)
 	})
 	if err != nil {
 		fatal(err)
