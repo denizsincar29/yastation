@@ -14,36 +14,18 @@ import (
 )
 
 func main() {
-	sess, err := quasar.NewSession()
+	sess, err := quasar.LoginViaQR(3*time.Minute, func(link string) {
+		fmt.Println("Откройте ссылку и подтвердите вход в Яндекс:")
+		fmt.Println(link)
+		openBrowser(link)
+	})
 	if err != nil {
 		fatal(err)
 	}
-
-	link, err := sess.GetQR()
-	if err != nil {
+	if err := quasar.SaveTokens(sess); err != nil {
 		fatal(err)
 	}
-	fmt.Println("Откройте ссылку и подтвердите вход в Яндекс:")
-	fmt.Println(link)
-	openBrowser(link)
-
-	deadline := time.Now().Add(3 * time.Minute)
-	for time.Now().Before(deadline) {
-		result, err := sess.LoginQR()
-		if err != nil {
-			fatal(err)
-		}
-		if result != nil {
-			if err := quasar.SaveTokens(sess); err != nil {
-				fatal(err)
-			}
-			fmt.Println("Готово. Токены сохранены в", quasar.TokenFilePath())
-			return
-		}
-		fmt.Println("Ожидаю подтверждение QR...")
-		time.Sleep(3 * time.Second)
-	}
-	fatal(fmt.Errorf("время ожидания QR истекло"))
+	fmt.Println("Готово. Токены сохранены в", quasar.TokenFilePath())
 }
 
 func openBrowser(url string) {
