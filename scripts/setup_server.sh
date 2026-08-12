@@ -1,156 +1,171 @@
 #!/usr/bin/env bash
-# setup_server.sh — deploy yastation-server on a VPS as a systemd service.
-#
-# What it does:
-#   1. Builds cmd/yastation-server and installs the binary system-wide.
-#   2. Picks a free TCP port (uses --port if free, otherwise the next
-#      free one after it).
-#   3. Generates a random bearer token for YASTATION_HTTP_TOKEN.
-#   4. Writes a systemd unit that runs the server as a given (non-root)
-#      user, and enables it.
-#   5. Prints a Caddyfile block you can drop in to reverse-proxy a
-#      subdomain to it.
-#
-# It does NOT run `yastation-auth` for you — Yandex login needs an
-# interactive QR scan, so do that once as the target user before starting
-# the service (see the printed instructions at the end).
-#
-# Usage:
-#   sudo ./scripts/setup_server.sh --user deniz --domain alice.denizsincar.ru [--port 8737] [--repo /path/to/yastation]
-#
-# Flags:
-#   --user    unix user the service runs as (required)
-#   --domain  subdomain to print a Caddyfile block for (optional)
-#   --port    preferred port, default 8737 (script picks the next free
-#             one if this is taken)
-#   --repo    path to a yastation checkout, default: this script's parent
-#             directory (i.e. run it from inside the repo, as normal)
-
+# setup_server.sh — интерактивная сборка и установка yastation-server.
+# Запускай как обычный пользователь из корня репозитория (или откуда угодно):
+#   bash scripts/setup_server.sh
+# sudo вызывается изнутри только там, где реально нужно (systemd-юнит).
 set -euo pipefail
 
-PORT=8737
-DOMAIN=""
-SERVICE_USER=""
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DIR="${ROOT_DIR}/bin"
+BIN_PATH="${BIN_DIR}/yastation-server"
+ENV_FILE="${ROOT_DIR}/.env"
+CURRENT_USER="${SUDO_USER:-$(id -un)}"
 
-usage() {
-	echo "Использование: sudo $0 --user ИМЯ_ПОЛЬЗОВАТЕЛЯ [--domain поддомен] [--port 8737] [--repo /путь/к/yastation]" >&2
-	exit 2
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
+err()    { printf '\033[31mОШИБКА: %s\033[0m\n' "$*" >&2; }
+
+ask() {
+  local var_name="$1" prompt="$2" default_val="${3:-}" secret="${4:-no}"
+  local prompt_display input
+  if [[ -n "${default_val}" ]]; then
+    prompt_display="${prompt} [${default_val}]: "
+  else
+    prompt_display="${prompt}: "
+  fi
+  if [[ "${secret}" == "yes" ]]; then
+    read -rsp "${prompt_display}" input
+    echo ""
+  else
+    read -rp "${prompt_display}" input
+  fi
+  [[ -z "${input}" && -n "${default_val}" ]] && input="${default_val}"
+  printf -v "${var_name}" '%s' "${input}"
 }
-
-while [ $# -gt 0 ]; do
-	case "$1" in
-	--user)
-		SERVICE_USER="$2"
-		shift 2
-		;;
-	--domain)
-		DOMAIN="$2"
-		shift 2
-		;;
-	--port)
-		PORT="$2"
-		shift 2
-		;;
-	--repo)
-		REPO_DIR="$2"
-		shift 2
-		;;
-	-h | --help)
-		usage
-		;;
-	*)
-		echo "Неизвестный аргумент: $1" >&2
-		usage
-		;;
-	esac
-done
-
-if [ -z "$SERVICE_USER" ]; then
-	echo "Нужен --user (от чьего имени запускать сервис)" >&2
-	usage
-fi
-if [ "$(id -u)" -ne 0 ]; then
-	echo "Запусти через sudo — нужно писать в /etc/systemd/system и /usr/local/bin" >&2
-	exit 1
-fi
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-	echo "Пользователь $SERVICE_USER не существует. Создай его (adduser $SERVICE_USER) и запусти снова." >&2
-	exit 1
-fi
-if ! command -v go >/dev/null 2>&1; then
-	echo "Не нашёл 'go' в PATH. Поставь Go 1.23+ и запусти снова." >&2
-	exit 1
-fi
-if [ ! -f "$REPO_DIR/go.mod" ]; then
-	echo "Не похоже на репозиторий yastation: $REPO_DIR/go.mod не найден. Передай верный --repo." >&2
-	exit 1
-fi
-
-# --- 1. Build ---------------------------------------------------------
-
-echo "Собираю yastation-server..."
-BUILD_DIR="$(mktemp -d)"
-trap 'rm -rf "$BUILD_DIR"' EXIT
-(cd "$REPO_DIR" && GOTOOLCHAIN=local go build -o "$BUILD_DIR/yastation-server" ./cmd/yastation-server)
-
-install -m 0755 "$BUILD_DIR/yastation-server" /usr/local/bin/yastation-server
-echo "Установлено: /usr/local/bin/yastation-server"
-
-# --- 2. Find a free port ------------------------------------------------
 
 port_in_use() {
-	# Try ss first (most distros), fall back to /dev/tcp probing.
-	if command -v ss >/dev/null 2>&1; then
-		ss -ltn "( sport = :$1 )" 2>/dev/null | grep -q ":$1"
-	else
-		(exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- 3>&-
-	fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :$1 )" 2>/dev/null | grep -q ":$1"
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- 3>&-
+  fi
 }
 
-while port_in_use "$PORT"; do
-	echo "Порт $PORT занят, пробую следующий..."
-	PORT=$((PORT + 1))
-done
-echo "Использую порт: $PORT"
+echo ""
+bold "╔════════════════════════════════════════╗"
+bold "║   yastation-server — сборка и установка  ║"
+bold "╚════════════════════════════════════════╝"
+echo ""
 
-# --- 3. Generate a bearer token -----------------------------------------
-
-if command -v openssl >/dev/null 2>&1; then
-	HTTP_TOKEN="$(openssl rand -hex 32)"
-else
-	HTTP_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+if ! command -v go >/dev/null 2>&1; then
+  err "не нашёл 'go' в PATH. Поставь Go 1.23+ и запусти скрипт снова."
+  exit 1
 fi
-echo "Сгенерирован токен для YASTATION_HTTP_TOKEN (полный вывод — ниже)"
+green "✔  $(go version)"
 
-# --- 4. systemd unit -----------------------------------------------------
+# ── Настройки сервера ────────────────────────────────────────────
 
-USER_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
-TOKEN_FILE="$USER_HOME/.config/yastation/tokens.json"
-ENV_FILE="/etc/yastation/server.env"
-UNIT_FILE="/etc/systemd/system/yastation.service"
+echo ""
+bold "── Настройки сервера ─────────────────────────────────────────"
+ask PORT "Порт" "8737"
+while ! [[ "${PORT}" =~ ^[0-9]+$ ]]; do
+  yellow "  порт должен быть числом"
+  ask PORT "Порт" "8737"
+done
+while port_in_use "${PORT}"; do
+  yellow "  порт ${PORT} занят, пробую следующий..."
+  PORT=$((PORT + 1))
+done
+green "✔  Использую порт: ${PORT}"
 
-mkdir -p /etc/yastation
-umask 077
-cat >"$ENV_FILE" <<EOF
-YASTATION_HTTP_ADDR=:$PORT
-YASTATION_HTTP_TOKEN=$HTTP_TOKEN
-YASTATION_TOKEN_FILE=$TOKEN_FILE
-EOF
-chmod 600 "$ENV_FILE"
-echo "Настройки записаны в $ENV_FILE (владелец root, права 600)"
+ask DOMAIN "Поддомен для Caddy (пусто — пропустить)" ""
 
-cat >"$UNIT_FILE" <<EOF
+DEFAULT_TOKEN_FILE="${HOME}/.config/yastation/tokens.json"
+ask TOKEN_FILE "Файл токенов Яндекс-аккаунта" "${DEFAULT_TOKEN_FILE}"
+
+echo ""
+if command -v openssl >/dev/null 2>&1; then
+  DEFAULT_HTTP_TOKEN="$(openssl rand -hex 32)"
+else
+  DEFAULT_HTTP_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+echo "Сгенерирован случайный токен для доступа к API — просто нажми Enter,"
+echo "чтобы использовать его, или впиши свой."
+ask HTTP_TOKEN "YASTATION_HTTP_TOKEN" "${DEFAULT_HTTP_TOKEN}"
+
+echo ""
+read -rp "Подключить свои команды из examples/commands.json? [y/N]: " use_custom
+
+# ── .env ────────────────────────────────────────────────────────
+
+WRITE_ENV=true
+if [[ -f "${ENV_FILE}" ]]; then
+  yellow "⚠  .env уже существует: ${ENV_FILE}"
+  read -rp "   Перезаписать? [y/N]: " overwrite
+  [[ "${overwrite,,}" != "y" ]] && WRITE_ENV=false
+fi
+
+if $WRITE_ENV; then
+  {
+    echo "# yastation-server — сгенерировано scripts/setup_server.sh"
+    echo "# $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    echo "YASTATION_HTTP_ADDR=:${PORT}"
+    echo "YASTATION_HTTP_TOKEN=${HTTP_TOKEN}"
+    echo "YASTATION_TOKEN_FILE=${TOKEN_FILE}"
+    if [[ "${use_custom,,}" == "y" ]]; then
+      echo "YASTATION_COMMANDS_FILE=${ROOT_DIR}/examples/commands.json"
+    fi
+  } >"${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  green "✔  .env записан (${ENV_FILE}, права 600)"
+else
+  echo "Оставляю существующий .env без изменений."
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+  PORT="${YASTATION_HTTP_ADDR#*:}"
+  HTTP_TOKEN="${YASTATION_HTTP_TOKEN}"
+  TOKEN_FILE="${YASTATION_TOKEN_FILE:-${DEFAULT_TOKEN_FILE}}"
+fi
+
+# ── Сборка ──────────────────────────────────────────────────────
+
+echo ""
+bold "── Сборка ─────────────────────────────────────────────────────"
+mkdir -p "${BIN_DIR}"
+(cd "${ROOT_DIR}" && go build -o "${BIN_PATH}" ./cmd/yastation-server)
+green "✔  Собрано: ${BIN_PATH}"
+
+# ── Авторизация в Яндексе, если ещё не пройдена ──────────────────
+
+if [[ ! -f "${TOKEN_FILE}" ]]; then
+  echo ""
+  yellow "ℹ  Файл токенов ${TOKEN_FILE} не найден — нужна разовая QR-авторизация."
+  read -rp "   Авторизоваться сейчас? [Y/n]: " do_auth
+  if [[ "${do_auth,,}" != "n" ]]; then
+    (cd "${ROOT_DIR}" && YASTATION_TOKEN_FILE="${TOKEN_FILE}" go run ./cmd/yastation-auth)
+  else
+    yellow "   Не забудь потом: YASTATION_TOKEN_FILE=${TOKEN_FILE} go run ./cmd/yastation-auth"
+  fi
+fi
+
+# ── systemd, опционально ─────────────────────────────────────────
+
+echo ""
+read -rp "Установить как systemd-сервис? [Y/n]: " install_service
+INSTALL_SERVICE=true
+[[ "${install_service,,}" == "n" ]] && INSTALL_SERVICE=false
+
+if $INSTALL_SERVICE; then
+  SERVICE_NAME="yastation.service"
+  SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+  CURRENT_GROUP="$(id -gn "${CURRENT_USER}")"
+
+  SERVICE_CONTENT=$(cat <<SVCEOF
 [Unit]
-Description=yastation HTTP backend (Yandex Station control)
+Description=yastation-server — управление Яндекс Станцией
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
-EnvironmentFile=$ENV_FILE
-ExecStart=/usr/local/bin/yastation-server
+User=${CURRENT_USER}
+Group=${CURRENT_GROUP}
+WorkingDirectory=${ROOT_DIR}
+EnvironmentFile=-${ENV_FILE}
+ExecStart=${BIN_PATH}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -158,43 +173,53 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-EOF
-echo "Юнит записан в $UNIT_FILE"
+SVCEOF
+  )
 
-systemctl daemon-reload
-systemctl enable yastation.service
-echo "Сервис включён (enable), но пока не запущен — сначала нужна авторизация, см. ниже."
+  bold "── Устанавливаю systemd-сервис (${SERVICE_PATH})…"
+  if [[ "${EUID}" -eq 0 ]]; then
+    printf '%s\n' "${SERVICE_CONTENT}" >"${SERVICE_PATH}"
+    chmod 644 "${SERVICE_PATH}"
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}"
+  else
+    if ! command -v sudo >/dev/null 2>&1; then
+      err "нужен sudo, чтобы установить сервис"
+      exit 1
+    fi
+    printf '%s\n' "${SERVICE_CONTENT}" | sudo tee "${SERVICE_PATH}" >/dev/null
+    sudo chmod 644 "${SERVICE_PATH}"
+    sudo systemctl daemon-reload
+    sudo systemctl enable "${SERVICE_NAME}"
+    sudo systemctl restart "${SERVICE_NAME}"
+  fi
 
-# --- 5. Final instructions ------------------------------------------------
-
-echo
-echo "===================================================================="
-echo "Готово. Осталось:"
-echo
-echo "1) Авторизуйся под пользователем $SERVICE_USER (нужен интерактивный QR):"
-echo "     sudo -u $SERVICE_USER -H env YASTATION_TOKEN_FILE=$TOKEN_FILE \\"
-echo "       go run $REPO_DIR/cmd/yastation-auth"
-echo
-echo "2) Запусти сервис:"
-echo "     sudo systemctl start yastation.service"
-echo "     sudo systemctl status yastation.service"
-echo
-echo "3) Токен для запросов к API (сохрани, второй раз не покажу):"
-echo "     $HTTP_TOKEN"
-echo
-echo "   Проверка:"
-echo "     curl -X POST localhost:$PORT/command \\"
-echo "       -H \"Authorization: Bearer $HTTP_TOKEN\" \\"
-echo "       -d '{\"text\": \"привет с сервера\"}'"
-echo
-if [ -n "$DOMAIN" ]; then
-	echo "4) Добавь в Caddyfile и перезапусти Caddy (systemctl reload caddy):"
-	echo
-	echo "   $DOMAIN {"
-	echo "       reverse_proxy localhost:$PORT"
-	echo "   }"
-else
-	echo "4) Если нужен домен — запусти скрипт с --domain поддомен.example,"
-	echo "   и здесь появится готовый блок для Caddyfile."
+  echo ""
+  green "✔  Сервис установлен и запущен: ${SERVICE_NAME}"
+  echo "   Статус: sudo systemctl status ${SERVICE_NAME}"
+  echo "   Логи:   sudo journalctl -u ${SERVICE_NAME} -f"
 fi
-echo "===================================================================="
+
+# ── Проверка и Caddyfile ─────────────────────────────────────────
+
+echo ""
+bold "── Проверка ───────────────────────────────────────────────────"
+echo "  curl -X POST localhost:${PORT}/command \\"
+echo "    -H \"Authorization: Bearer ${HTTP_TOKEN}\" \\"
+echo "    -d '{\"text\": \"привет с сервера\"}'"
+
+if [[ -n "${DOMAIN}" ]]; then
+  echo ""
+  bold "── Caddyfile ─────────────────────────────────────────────────"
+  echo "  ${DOMAIN} {"
+  echo "      reverse_proxy localhost:${PORT}"
+  echo "  }"
+  echo ""
+  echo "  Перезапуск: sudo systemctl reload caddy"
+fi
+
+echo ""
+bold "── Быстрый запуск без systemd ───────────────────────────────"
+echo "  set -a && source ${ENV_FILE} && set +a && ${BIN_PATH}"
+echo ""
