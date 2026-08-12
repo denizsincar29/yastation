@@ -8,25 +8,32 @@
 //
 // Two auth modes:
 //   - "Bring your own token" (default): a request carrying an
-//     X-Yandex-Token header runs against *that* Yandex account. No
-//     account of the server's own is needed — nothing to authorize on
-//     the box, nothing to leak if the box is compromised. Clients built
-//     this way are cached briefly per token (see tokenClientCache) so
-//     repeated requests don't redo the login handshake every time.
+//     X-Yandex-Token header runs against *that* Yandex account — but
+//     only if that account's uid is on the allowlist (see
+//     internal/access, cmd/yastation-access). No account of the server's
+//     own is needed — nothing to authorize on the box, nothing to leak
+//     if the box is compromised. Clients built this way are cached
+//     briefly per token (see tokenClientCache) so repeated requests
+//     don't redo the login handshake every time, but the allowlist is
+//     re-checked on every request even against a cached client, so
+//     revoking someone (yastation-access remove) takes effect on their
+//     very next request, not after the cache entry expires.
 //   - Own account (opt-in via YASTATION_USE_DEFAULT_ACCOUNT=1): the
 //     server also keeps its own pre-authenticated account (from
 //     yastation-auth) and uses it for any request that doesn't carry
-//     X-Yandex-Token.
+//     X-Yandex-Token. Not allowlist-gated — it's the server's own
+//     account, trusted by definition; gated by YASTATION_HTTP_TOKEN like
+//     everything else.
 //
 // The auth modes above are about *whose Yandex account* a request runs
 // against. That's orthogonal to YASTATION_HTTP_TOKEN, which is this
 // server's own API key (checked via "Authorization: Bearer ...") so
 // random callers can't hit your HTTP endpoint at all. It's optional (the
-// server logs a warning and runs open without it) but worth setting any
-// time the port is reachable from outside localhost — BYOT-only doesn't
-// make it optional: without it, anyone can use your server as an
-// anonymous relay for *any* Yandex account they hand it a token for,
-// burning your bandwidth and CPU on someone else's traffic.
+// server logs a warning and runs open without it) — with the allowlist
+// in place, an unauthenticated stranger sending a valid X-Yandex-Token
+// for an account that isn't on the list gets rejected regardless, so
+// YASTATION_HTTP_TOKEN is defense-in-depth rather than the only thing
+// standing between your server and abuse.
 package main
 
 import (
@@ -35,6 +42,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -43,6 +51,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
@@ -52,8 +61,6 @@ func main() {
 	token := os.Getenv("YASTATION_HTTP_TOKEN")
 	if token == "" {
 		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
-		log.Println("Задайте переменную окружения, если сервер смотрит наружу, а не только в localhost —")
-		log.Println("иначе кто угодно сможет дёргать /command своими X-Yandex-Token через твой сервер.")
 		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
 	}
 
@@ -82,6 +89,22 @@ func main() {
 		log.Println("Чтобы включить свой аккаунт, задайте YASTATION_USE_DEFAULT_ACCOUNT=1.")
 	}
 
+	accessPath := access.FilePath()
+	loadAccess := func() *access.List {
+		l, err := access.Load(accessPath)
+		if err != nil {
+			log.Printf("не смог прочитать %s: %v — считаю список допуска пустым (BYOT никому не разрешён)", accessPath, err)
+			return &access.List{}
+		}
+		return l
+	}
+	if initial := loadAccess(); len(initial.Entries) == 0 {
+		log.Printf("Список допуска %s пуст — BYOT сейчас никому не разрешён.", accessPath)
+		log.Println("Добавь кого-нибудь: go run ./cmd/yastation-access add")
+	} else {
+		log.Printf("В списке допуска %d аккаунт(ов) (%s)", len(initial.Entries), accessPath)
+	}
+
 	// useDefaultAccount: opt-in only. By default the server has no
 	// Yandex account of its own — every request must bring its own
 	// X-Yandex-Token. Set this to also keep a default account (from
@@ -90,7 +113,7 @@ func main() {
 
 	var a *app.App
 	if !useDefaultAccount {
-		log.Println("BYOT (по умолчанию): своего аккаунта нет, каждый запрос должен нести X-Yandex-Token")
+		log.Println("BYOT (по умолчанию): своего аккаунта нет, каждый запрос должен нести X-Yandex-Token с аккаунта из списка допуска")
 	} else {
 		log.Println("Подключаюсь к Яндекс Станции (свой аккаунт, YASTATION_USE_DEFAULT_ACCOUNT=1)...")
 		client, err := quasar.Connect()
@@ -111,9 +134,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, defaultsCfg, customCfg))
+	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, defaultsCfg, customCfg, loadAccess))
 	mux.HandleFunc("GET /schedules", handleSchedules(a))
-	mux.HandleFunc("GET /stations", handleStations(tokenClients))
+	mux.HandleFunc("GET /stations", handleStations(tokenClients, loadAccess))
 
 	handler := withAuth(token, withLogging(mux))
 
@@ -149,15 +172,26 @@ type tokenClientCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
 	entries map[string]*tokenCacheEntry
+
+	// resolveIdentity/buildClient are overridable so tests can exercise
+	// get()'s caching/ACL logic without hitting the real Yandex API.
+	resolveIdentity func(xToken string) (quasar.Identity, error)
+	buildClient     func(xToken string) (*quasar.Client, error)
 }
 
 type tokenCacheEntry struct {
-	client  *quasar.Client
-	expires time.Time
+	client   *quasar.Client
+	identity quasar.Identity
+	expires  time.Time
 }
 
 func newTokenClientCache(ttl time.Duration) *tokenClientCache {
-	return &tokenClientCache{ttl: ttl, entries: map[string]*tokenCacheEntry{}}
+	return &tokenClientCache{
+		ttl:             ttl,
+		entries:         map[string]*tokenCacheEntry{},
+		resolveIdentity: quasar.WhoAmIFromXToken,
+		buildClient:     quasar.ClientFromXToken,
+	}
 }
 
 // hashToken never stores or logs the raw token, only a digest, so it
@@ -167,30 +201,62 @@ func hashToken(xToken string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// get returns a ready quasar.Client for xToken, building and caching one
-// (a fresh login handshake + device/scenario refresh) on first use.
-func (c *tokenClientCache) get(xToken string) (*quasar.Client, error) {
+// notAllowedError means the token was valid and its account resolved
+// fine, but that account's uid isn't on the access.json allowlist —
+// distinct from a plain login failure so handlers can answer 403
+// (forbidden) instead of 401 (unauthorized).
+type notAllowedError struct{ id quasar.Identity }
+
+func (e *notAllowedError) Error() string {
+	label := e.id.RealName
+	if label == "" {
+		label = e.id.Login
+	}
+	if label == "" {
+		label = e.id.UID
+	}
+	return fmt.Sprintf("аккаунт %q не в списке допуска (uid=%s) — попроси владельца сервера: yastation-access add", label, e.id.UID)
+}
+
+// get returns a ready quasar.Client for xToken, if its account's uid is
+// on list. Building one (identity check + login handshake + device
+// refresh) only happens on first use; after that the client is cached
+// for the cache's TTL — but list is re-checked on *every* call, cache
+// hit or not, so revoking someone takes effect on their very next
+// request rather than waiting out the cache.
+func (c *tokenClientCache) get(xToken string, list *access.List) (*quasar.Client, quasar.Identity, error) {
 	key := hashToken(xToken)
 
 	c.mu.Lock()
 	c.sweepLocked()
 	if e, ok := c.entries[key]; ok {
 		e.expires = time.Now().Add(c.ttl)
-		client := e.client
+		client, id := e.client, e.identity
 		c.mu.Unlock()
-		return client, nil
+		if !list.IsAllowed(id.UID) {
+			return nil, id, &notAllowedError{id}
+		}
+		return client, id, nil
 	}
 	c.mu.Unlock()
 
-	client, err := quasar.ClientFromXToken(xToken)
+	id, err := c.resolveIdentity(xToken)
 	if err != nil {
-		return nil, err
+		return nil, quasar.Identity{}, fmt.Errorf("не удалось определить аккаунт по токену: %w", err)
+	}
+	if !list.IsAllowed(id.UID) {
+		return nil, id, &notAllowedError{id}
+	}
+
+	client, err := c.buildClient(xToken)
+	if err != nil {
+		return nil, id, err
 	}
 
 	c.mu.Lock()
-	c.entries[key] = &tokenCacheEntry{client: client, expires: time.Now().Add(c.ttl)}
+	c.entries[key] = &tokenCacheEntry{client: client, identity: id, expires: time.Now().Add(c.ttl)}
 	c.mu.Unlock()
-	return client, nil
+	return client, id, nil
 }
 
 // sweepLocked drops expired entries. Called with c.mu held.
@@ -258,7 +324,7 @@ type commandResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig) http.HandlerFunc {
+func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig, loadAccess func() *access.List) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req commandRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -290,11 +356,12 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaults
 		defer cancel()
 
 		// Bring-your-own-token mode: run against the caller's own Yandex
-		// account instead of the server's default one.
+		// account instead of the server's default one — if that account
+		// is on the allowlist.
 		if xToken := r.Header.Get("X-Yandex-Token"); xToken != "" {
-			client, err := tokenClients.get(xToken)
+			client, _, err := tokenClients.get(xToken, loadAccess())
 			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "не удалось войти с этим токеном: " + err.Error()})
+				writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
 				return
 			}
 			tmpApp := buildApp(client, defaultsCfg, customCfg)
@@ -322,6 +389,18 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaults
 	}
 }
 
+// statusForTokenError picks the HTTP status for a tokenClientCache.get
+// error: 403 if the account was identified fine but isn't allowlisted,
+// 401 for anything else (bad/expired token, network failure talking to
+// Yandex, etc).
+func statusForTokenError(err error) int {
+	var na *notAllowedError
+	if errors.As(err, &na) {
+		return http.StatusForbidden
+	}
+	return http.StatusUnauthorized
+}
+
 type stationJSON struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -330,19 +409,20 @@ type stationJSON struct {
 }
 
 // handleStations lists the speakers on the account identified by the
-// required X-Yandex-Token header — the discovery step for
-// bring-your-own-token mode: call this first to find the station id/name
-// to pass as "station" in /command.
-func handleStations(tokenClients *tokenClientCache) http.HandlerFunc {
+// required X-Yandex-Token header (which must be on the access.json
+// allowlist) — the discovery step for bring-your-own-token mode: call
+// this first to find the station id/name to pass as "station" in
+// /command.
+func handleStations(tokenClients *tokenClientCache, loadAccess func() *access.List) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		xToken := r.Header.Get("X-Yandex-Token")
 		if xToken == "" {
 			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужен заголовок X-Yandex-Token"})
 			return
 		}
-		client, err := tokenClients.get(xToken)
+		client, _, err := tokenClients.get(xToken, loadAccess())
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "не удалось войти с этим токеном: " + err.Error()})
+			writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
 			return
 		}
 		out := make([]stationJSON, 0, len(client.Speakers))
