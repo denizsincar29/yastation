@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
+	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
 // fakeStation is a minimal app.StationAPI for testing the HTTP layer
@@ -94,6 +97,98 @@ func TestSweepLockedDropsExpiredOnly(t *testing.T) {
 	}
 }
 
+func TestTokenClientCacheGetDeniesUnlistedAccount(t *testing.T) {
+	c := newTokenClientCache(time.Minute)
+	buildCalls := 0
+	c.resolveIdentity = func(xToken string) (quasar.Identity, error) {
+		return quasar.Identity{UID: "1", RealName: "Кто-то"}, nil
+	}
+	c.buildClient = func(xToken string) (*quasar.Client, error) {
+		buildCalls++
+		return &quasar.Client{}, nil
+	}
+
+	list := &access.List{} // empty — nobody allowed
+	_, _, err := c.get("tok", list)
+	if err == nil {
+		t.Fatal("expected error for unlisted account")
+	}
+	var na *notAllowedError
+	if !errors.As(err, &na) {
+		t.Fatalf("expected *notAllowedError, got %T: %v", err, err)
+	}
+	if buildCalls != 0 {
+		t.Fatal("buildClient must not run for a denied account")
+	}
+}
+
+func TestTokenClientCacheGetAllowsAndCachesListedAccount(t *testing.T) {
+	c := newTokenClientCache(time.Minute)
+	resolveCalls, buildCalls := 0, 0
+	fakeClient := &quasar.Client{}
+	c.resolveIdentity = func(xToken string) (quasar.Identity, error) {
+		resolveCalls++
+		return quasar.Identity{UID: "1", RealName: "Дениз"}, nil
+	}
+	c.buildClient = func(xToken string) (*quasar.Client, error) {
+		buildCalls++
+		return fakeClient, nil
+	}
+
+	list := &access.List{}
+	list.Add(access.Entry{Name: "Дениз", UID: "1"})
+
+	client, id, err := c.get("tok", list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client != fakeClient || id.UID != "1" {
+		t.Fatalf("client=%v id=%v", client, id)
+	}
+
+	// Second call with the same token should hit the cache: no repeated
+	// network resolution/build.
+	client2, _, err := c.get("tok", list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client2 != fakeClient {
+		t.Fatal("expected cached client on second call")
+	}
+	if resolveCalls != 1 || buildCalls != 1 {
+		t.Fatalf("expected exactly one resolve/build call, got resolve=%d build=%d", resolveCalls, buildCalls)
+	}
+}
+
+func TestTokenClientCacheGetRevokesEvenWithWarmCache(t *testing.T) {
+	c := newTokenClientCache(time.Minute)
+	c.resolveIdentity = func(xToken string) (quasar.Identity, error) {
+		return quasar.Identity{UID: "1", RealName: "Дениз"}, nil
+	}
+	c.buildClient = func(xToken string) (*quasar.Client, error) {
+		return &quasar.Client{}, nil
+	}
+
+	allowed := &access.List{}
+	allowed.Add(access.Entry{Name: "Дениз", UID: "1"})
+	if _, _, err := c.get("tok", allowed); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate `yastation-access remove` happening between requests: the
+	// client is still warm in cache, but the fresh list no longer has
+	// this uid.
+	revoked := &access.List{}
+	_, _, err := c.get("tok", revoked)
+	if err == nil {
+		t.Fatal("expected access to be denied immediately after revocation, even with a cached client")
+	}
+	var na *notAllowedError
+	if !errors.As(err, &na) {
+		t.Fatalf("expected *notAllowedError, got %T: %v", err, err)
+	}
+}
+
 // --- middleware --------------------------------------------------------
 
 func TestWithAuthRejectsMissingOrWrongToken(t *testing.T) {
@@ -148,6 +243,8 @@ func TestWithAuthNoTokenConfiguredAllowsEverything(t *testing.T) {
 
 // --- handlers ------------------------------------------------------------
 
+func emptyAccessList() *access.List { return &access.List{} }
+
 func TestHandleHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handleHealthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -161,7 +258,7 @@ func TestHandleCommandInvalidJSON(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader("{not json"))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -176,7 +273,7 @@ func TestHandleCommandMissingLineAndText(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -191,7 +288,7 @@ func TestHandleCommandDefaultAppSuccess(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет","station":"Кухня"}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -216,7 +313,7 @@ func TestHandleCommandXStationHeaderFillsStation(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет"}`))
 	req.Header.Set("X-Station", "Кухня")
 	rec := httptest.NewRecorder()
@@ -235,7 +332,7 @@ func TestHandleCommandAsCommandFlag(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"включи радио","as_command":true}`))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -246,7 +343,7 @@ func TestHandleCommandAsCommandFlag(t *testing.T) {
 }
 
 func TestHandleStationsRequiresXYandexToken(t *testing.T) {
-	h := handleStations(newTokenClientCache(time.Minute))
+	h := handleStations(newTokenClientCache(time.Minute), emptyAccessList)
 	req := httptest.NewRequest(http.MethodGet, "/stations", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -266,7 +363,7 @@ func TestHandleCommandBYOTFailsClosedOnBadToken(t *testing.T) {
 	a := app.New(f)
 	defer a.Close()
 
-	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil)
+	h := handleCommand(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList)
 	req := httptest.NewRequest(http.MethodPost, "/command", strings.NewReader(`{"text":"привет"}`))
 	req.Header.Set("X-Yandex-Token", "definitely-not-a-real-token")
 	rec := httptest.NewRecorder()
