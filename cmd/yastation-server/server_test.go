@@ -55,13 +55,17 @@ func (f *fakeStation) Previous(station string) error                     { retur
 func (f *fakeStation) Timer(station string, minutes int, label string) error {
 	return f.record("timer")
 }
-func (f *fakeStation) Alarm(station, at, label string) error     { return f.record("alarm") }
-func (f *fakeStation) Reminder(station, text, when string) error { return f.record("reminder") }
-func (f *fakeStation) Weather(station string) error              { return f.record("weather") }
-func (f *fakeStation) News(station string) error                 { return f.record("news") }
-func (f *fakeStation) RunScenario(name string) error             { return f.record("scenario") }
-func (f *fakeStation) ListScenarios() []string                   { return nil }
-func (f *fakeStation) Diagnostics() (string, error)              { return "ok", nil }
+func (f *fakeStation) Alarm(station, at, label string) error      { return f.record("alarm") }
+func (f *fakeStation) Reminder(station, text, when string) error  { return f.record("reminder") }
+func (f *fakeStation) Weather(station string) error               { return f.record("weather") }
+func (f *fakeStation) News(station string) error                  { return f.record("news") }
+func (f *fakeStation) RunScenario(name string) error              { return f.record("scenario") }
+func (f *fakeStation) ListScenarios() []string                    { return nil }
+func (f *fakeStation) Diagnostics() (string, error)               { return "ok", nil }
+func (f *fakeStation) Capabilities(station string) ([]any, error) { return nil, nil }
+func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
+	return nil
+}
 
 // --- token cache -----------------------------------------------------
 

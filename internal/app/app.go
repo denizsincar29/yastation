@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -38,6 +39,12 @@ type StationAPI interface {
 	RunScenario(name string) error
 	ListScenarios() []string
 	Diagnostics() (string, error)
+
+	// Capabilities/RawCapability are the experimental, unverified escape
+	// hatch into whatever Yandex's device capability list offers beyond
+	// tts/text_action/volume — see quasar.Client for the caveats.
+	Capabilities(station string) ([]any, error)
+	RawCapability(station, capType, instance string, value any) error
 }
 
 // App bundles a connected station client with the plumbing to run
@@ -282,6 +289,54 @@ func (a *App) registerCommands() {
 		}
 		return a.executeScript(ctx, args[0])
 	}, "execute")
+
+	d.HandleCat("Экспериментально",
+		"Скажи фразу шёпотом — родная фраза Алисы \"скажи шёпотом ...\", не выдумка этого проекта: /whisper текст",
+		func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			text := dispatch.Rest(rest)
+			if text == "" {
+				return "", fmt.Errorf("нужен текст: /whisper тише едешь дальше будешь")
+			}
+			if err := a.Client.Command(station, "скажи шёпотом "+text); err != nil {
+				return "", err
+			}
+			return "[шёпотом] " + text, nil
+		}, "whisper", "шёпот")
+
+	d.HandleCat("Экспериментально",
+		"Сырые capabilities станции как есть от Яндекса — для разведки протокола: /capabilities [станция]",
+		func(ctx context.Context, args []string) (string, error) {
+			st, _ := station(args)
+			caps, err := a.Client.Capabilities(st)
+			if err != nil {
+				return "", err
+			}
+			b, err := json.MarshalIndent(caps, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			return string(b), nil
+		}, "capabilities", "caps")
+
+	d.HandleCat("Экспериментально",
+		"Сырой вызов capability в обход всех типизированных команд (см. /capabilities для имён): /raw тип instance значение",
+		func(ctx context.Context, args []string) (string, error) {
+			st, rest := station(args)
+			if len(rest) < 3 {
+				return "", fmt.Errorf("нужно: /raw <тип> <instance> <значение>, например /raw devices.capabilities.quasar tts {\"text\":\"привет\"}")
+			}
+			capType, instance := rest[0], rest[1]
+			raw := dispatch.Rest(rest[2:])
+			var value any
+			if err := json.Unmarshal([]byte(raw), &value); err != nil {
+				value = raw // не JSON — шлём как обычную строку
+			}
+			if err := a.Client.RawCapability(st, capType, instance, value); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("[raw %s/%s] отправлено: %v", capType, instance, value), nil
+		}, "raw")
 
 	d.HandleCat("Справка", "Список команд (по /команда? — справка по одной)", func(ctx context.Context, args []string) (string, error) {
 		return d.Help(), nil

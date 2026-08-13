@@ -52,3 +52,10 @@ func (f *fakeStation) Volume(station string, level float64) error {
 func (f *fakeStation) RunScenario(name string) error { return f.record("scenario:" + name) }
 func (f *fakeStation) ListScenarios() []string       { return f.scenarios }
 func (f *fakeStation) Diagnostics() (string, error)  { return "diag-ok", nil }
+func (f *fakeStation) Capabilities(station string) ([]any, error) {
+	f.record("caps:" + station)
+	return []any{"stub-capability"}, nil
+}
+func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
+	return f.record(fmt.Sprintf("raw:%s:%s:%s:%v", station, capType, instance, value))
+}
