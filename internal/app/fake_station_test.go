@@ -14,6 +14,10 @@ type fakeStation struct {
 	calls     []string
 	scenarios []string
 	failNext  bool
+
+	// capabilities lets a test control what Capabilities() returns —
+	// defaults (nil) to the plain stub-capability placeholder.
+	capabilities []any
 }
 
 var errFake = errors.New("simulated failure")
@@ -54,6 +58,9 @@ func (f *fakeStation) ListScenarios() []string       { return f.scenarios }
 func (f *fakeStation) Diagnostics() (string, error)  { return "diag-ok", nil }
 func (f *fakeStation) Capabilities(station string) ([]any, error) {
 	f.record("caps:" + station)
+	if f.capabilities != nil {
+		return f.capabilities, nil
+	}
 	return []any{"stub-capability"}, nil
 }
 func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
@@ -73,3 +80,4 @@ func (f *fakeStation) LightScene(station, sceneID string) error {
 }
 func (f *fakeStation) Weather(station string) error   { return f.record("weather:" + station) }
 func (f *fakeStation) PlayMusic(station string) error { return f.record("music:" + station) }
+func (f *fakeStation) Refresh() error                 { return f.record("refresh") }

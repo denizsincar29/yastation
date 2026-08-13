@@ -59,6 +59,7 @@ func (f *fakeStation) StopEverything(station string) error      { return nil }
 func (f *fakeStation) LightScene(station, sceneID string) error { return nil }
 func (f *fakeStation) Weather(station string) error             { return nil }
 func (f *fakeStation) PlayMusic(station string) error           { return nil }
+func (f *fakeStation) Refresh() error                           { return nil }
 
 func TestRunOnceExecutesInOrder(t *testing.T) {
 	f := &fakeStation{}

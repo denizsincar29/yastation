@@ -211,16 +211,26 @@ func TestWhisperUsesStructuredWhisperFlag(t *testing.T) {
 	}
 }
 
-func TestSoundRequiresID(t *testing.T) {
+func TestSoundFuzzyMatchByName(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
-	mustExec(t, a, "/sound chainsaw-1")
+	mustExec(t, a, "/sound свисток чайника")
 	calls := f.Calls()
-	if len(calls) != 1 || calls[0] != "sound::chainsaw-1" {
+	if len(calls) != 1 || calls[0] != "sound::kettle-whistle-1" {
 		t.Fatalf("calls=%v", calls)
 	}
 	if _, err := a.Execute(context.Background(), "/sound"); err == nil {
-		t.Fatal("expected error without an id")
+		t.Fatal("expected error without a query")
+	}
+}
+
+func TestSoundAmbiguousQueryErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	// explosion-1 and explosion-2 both match "explosion" — must not
+	// silently pick one.
+	if _, err := a.Execute(context.Background(), "/sound explosion"); err == nil {
+		t.Fatal("expected error for an ambiguous query")
 	}
 }
 
@@ -234,16 +244,67 @@ func TestStopAll(t *testing.T) {
 	}
 }
 
-func TestSceneRequiresID(t *testing.T) {
+func TestSceneListsOptionsWhenNoArgs(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
-	mustExec(t, a, "/scene night")
+	f.capabilities = testSceneCapabilities()
+
+	out, err := a.Execute(context.Background(), "/scene")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "night") || !strings.Contains(out, "Ночь") {
+		t.Fatalf("out=%q", out)
+	}
+}
+
+func TestSceneMatchesByRussianName(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	f.capabilities = testSceneCapabilities()
+
+	mustExec(t, a, "/scene ночь")
 	calls := f.Calls()
-	if len(calls) != 1 || calls[0] != "scene::night" {
+	// last call should be the scene set (caps: was recorded first)
+	last := calls[len(calls)-1]
+	if last != "scene::night" {
 		t.Fatalf("calls=%v", calls)
 	}
-	if _, err := a.Execute(context.Background(), "/scene"); err == nil {
-		t.Fatal("expected error without an id")
+}
+
+func TestSceneNoSuchCapabilityErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	// default fakeStation.Capabilities has no color_setting entry
+	if _, err := a.Execute(context.Background(), "/scene night"); err == nil {
+		t.Fatal("expected error when the device has no color_setting capability")
+	}
+}
+
+func testSceneCapabilities() []any {
+	return []any{
+		map[string]any{
+			"type": "devices.capabilities.color_setting",
+			"parameters": map[string]any{
+				"instance": "color",
+				"scenes": []any{
+					map[string]any{"id": "lava_lamp", "name": "Лава лампа"},
+					map[string]any{"id": "inactive", "name": "Неактивный"},
+					map[string]any{"id": "night", "name": "Ночь"},
+					map[string]any{"id": "candle", "name": "Свеча"},
+				},
+			},
+		},
+	}
+}
+
+func TestRefresh(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/refresh")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "refresh" {
+		t.Fatalf("calls=%v", calls)
 	}
 }
 

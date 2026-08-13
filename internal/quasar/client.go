@@ -507,6 +507,59 @@ func (c *Client) Capabilities(station string) ([]any, error) {
 	return dev.Capabilities, nil
 }
 
+// SceneOption is one available light scene, extracted from a
+// Capabilities() dump — see SceneOptions.
+type SceneOption struct {
+	ID   string
+	Name string
+}
+
+// SceneOptions pulls the available light scenes (id + human name) out
+// of a Capabilities() dump for devices that have a color_setting
+// capability with a "scenes" list — e.g. a real device's dump showed
+// {"lava_lamp":"Лава лампа","inactive":"Неактивный","night":"Ночь",
+// "candle":"Свеча"}. Confirmed present on real hardware (the list
+// itself); LightScene's write-path (does sending {"id":...} actually
+// select one) is not.
+//
+// Returns ok=false if this device reports no such capability at all
+// (e.g. a speaker with no light) rather than an empty list, so callers
+// can tell "no scenes" from "doesn't support scenes".
+func SceneOptions(caps []any) (options []SceneOption, ok bool) {
+	for _, raw := range caps {
+		m, isMap := raw.(map[string]any)
+		if !isMap {
+			continue
+		}
+		if t, _ := m["type"].(string); t != "devices.capabilities.color_setting" {
+			continue
+		}
+		params, isMap := m["parameters"].(map[string]any)
+		if !isMap {
+			continue
+		}
+		scenesRaw, isSlice := params["scenes"].([]any)
+		if !isSlice {
+			continue
+		}
+		var out []SceneOption
+		for _, sRaw := range scenesRaw {
+			sm, isMap := sRaw.(map[string]any)
+			if !isMap {
+				continue
+			}
+			id, _ := sm["id"].(string)
+			name, _ := sm["name"].(string)
+			if id == "" {
+				continue
+			}
+			out = append(out, SceneOption{ID: id, Name: name})
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // RawCapability sends one arbitrary capability action to a device via
 // the same throwaway-per-device-scenario mechanism Say/Command/Volume
 // use internally (see sendCloud/ensureScenario) — just with the

@@ -14,8 +14,10 @@ import (
 	"strings"
 
 	"github.com/denizsincar29/yastation/internal/dispatch"
+	"github.com/denizsincar29/yastation/internal/quasar"
 	"github.com/denizsincar29/yastation/internal/queue"
 	"github.com/denizsincar29/yastation/internal/scheduler"
+	"github.com/denizsincar29/yastation/internal/sounds"
 )
 
 // StationAPI is the subset of *quasar.Client that the command layer
@@ -55,6 +57,11 @@ type StationAPI interface {
 	LightScene(station, sceneID string) error
 	Weather(station string) error
 	PlayMusic(station string) error
+
+	// Refresh re-pulls devices/scenarios/capabilities from Yandex —
+	// mainly useful to confirm a capability change (e.g. LightScene)
+	// actually took effect, by reading Capabilities() again afterwards.
+	Refresh() error
 }
 
 // App bundles a connected station client with the plumbing to run
@@ -331,17 +338,21 @@ func (a *App) registerCommands() {
 		}, "whisper", "шёпот")
 
 	d.HandleCat("Экспериментально",
-		"Звук из библиотеки Алисы по id (см. /capabilities -> sound_play после того, как попросишь звук голосом): /sound chainsaw-1",
+		"Звук из библиотеки Алисы по (части) имени, RU или EN — если совпадение одно, id подставится сам: /sound бензопила, /sound explosion",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
 			if len(rest) == 0 {
-				return "", fmt.Errorf("нужен id звука: /sound chainsaw-1")
+				return "", fmt.Errorf("нужно имя звука: /sound бензопила")
 			}
-			id := rest[0]
+			query := dispatch.Rest(rest)
+			id, candidates, ok := sounds.FindEffect(query)
+			if !ok {
+				return "", fmt.Errorf("%s", sounds.FormatCandidates(query, candidates))
+			}
 			if err := a.Client.PlaySound(station, id); err != nil {
 				return "", err
 			}
-			return "[звук] " + id, nil
+			return fmt.Sprintf("[звук] %s (запрос: %s)", id, query), nil
 		}, "sound")
 
 	d.HandleCat("Экспериментально",
@@ -355,18 +366,62 @@ func (a *App) registerCommands() {
 		}, "stopall")
 
 	d.HandleCat("Экспериментально",
-		"Цветовая сцена подсветки колонки по id (см. /capabilities -> color_setting/scenes для списка на твоём устройстве): /scene night",
+		"Цветовая сцена подсветки колонки — без аргумента покажет список доступных сцен на этой станции (текстом, для неё не нужны глаза): /scene, /scene ночь",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
-			if len(rest) == 0 {
-				return "", fmt.Errorf("нужен id сцены: /scene night")
+			caps, err := a.Client.Capabilities(station)
+			if err != nil {
+				return "", err
 			}
-			id := rest[0]
+			options, hasScenes := quasar.SceneOptions(caps)
+			if !hasScenes {
+				return "", fmt.Errorf("на этой станции нет цветовых сцен (нет capability color_setting/scenes)")
+			}
+			if len(rest) == 0 {
+				if len(options) == 0 {
+					return "цветовых сцен на этой станции нет", nil
+				}
+				var lines []string
+				for _, o := range options {
+					lines = append(lines, fmt.Sprintf("%s (%s)", o.ID, o.Name))
+				}
+				return "Доступные сцены:\n  " + strings.Join(lines, "\n  "), nil
+			}
+
+			query := strings.ToLower(dispatch.Rest(rest))
+			var id, matchedName string
+			matches := 0
+			for _, o := range options {
+				if strings.EqualFold(o.ID, query) {
+					id, matchedName = o.ID, o.Name
+					matches = 1
+					break
+				}
+				if strings.Contains(strings.ToLower(o.Name), query) || strings.Contains(strings.ToLower(o.ID), query) {
+					id, matchedName = o.ID, o.Name
+					matches++
+				}
+			}
+			if matches == 0 {
+				return "", fmt.Errorf("сцена не найдена: %q — наберите /scene без аргументов, чтобы увидеть список", query)
+			}
+			if matches > 1 {
+				return "", fmt.Errorf("неоднозначный запрос %q, уточните — /scene без аргументов покажет список", query)
+			}
 			if err := a.Client.LightScene(station, id); err != nil {
 				return "", err
 			}
-			return "[сцена] " + id, nil
+			return fmt.Sprintf("[сцена] %s (%s) — проверить можно через /refresh и /scene", id, matchedName), nil
 		}, "scene", "light")
+
+	d.HandleCat("Диагностика",
+		"Перечитать список станций/сценариев/capabilities с Яндекса — например, чтобы прочитать текстом, применилась ли смена сцены/звука, не дожидаясь визуальной проверки: /refresh",
+		func(ctx context.Context, args []string) (string, error) {
+			if err := a.Client.Refresh(); err != nil {
+				return "", err
+			}
+			return "[обновлено]", nil
+		}, "refresh")
 
 	d.HandleCat("Экспериментально",
 		"Погода через структурную capability вместо фразы \"какая погода\" — подтверждено на реальном дампе, сработает ли запуск не проверено отдельно: /weather [станция]",
