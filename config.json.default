@@ -41,14 +41,6 @@
       "category": "Плеер"
     },
     {
-      "name": "weather",
-      "help": "Спросить погоду",
-      "params": [],
-      "template": "какая погода",
-      "kind": "command",
-      "category": "Информация"
-    },
-    {
       "name": "news",
       "help": "Включить новости",
       "params": [],

@@ -182,7 +182,7 @@ func TestExecuteScript(t *testing.T) {
 
 	mustExec(t, a, "/execute "+path)
 	calls := f.Calls()
-	want := []string{"volume::0.5", "say::доброе утро", "cmd::какая погода"}
+	want := []string{"volume::0.5", "say::доброе утро", "weather:"}
 	if len(calls) != len(want) {
 		t.Fatalf("calls=%v", calls)
 	}
@@ -244,6 +244,26 @@ func TestSceneRequiresID(t *testing.T) {
 	}
 	if _, err := a.Execute(context.Background(), "/scene"); err == nil {
 		t.Fatal("expected error without an id")
+	}
+}
+
+func TestWeatherViaCapability(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/weather")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "weather:" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestMusicViaCapability(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/music")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "music:" {
+		t.Fatalf("calls=%v", calls)
 	}
 }
 

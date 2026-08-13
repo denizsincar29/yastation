@@ -68,7 +68,13 @@ func (q *Queue) worker() {
 				return
 			}
 			err := qj.job.Run()
-			if err != nil {
+			if err != nil && qj.result == nil {
+				// Nobody's waiting for this result — a fire-and-forget
+				// Enqueue call (e.g. a scheduled /every job) — so this is
+				// the only place the error will ever surface, log it here.
+				// EnqueueWait callers (the REPL, HTTP handlers) get the
+				// error back directly and print/report it themselves;
+				// logging it here too would just double it up.
 				q.logger.Printf("[очередь] ошибка выполняя %q: %v", qj.job.Label, err)
 			}
 			if qj.result != nil {
