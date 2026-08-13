@@ -45,6 +45,14 @@ type StationAPI interface {
 	// tts/text_action/volume — see quasar.Client for the caveats.
 	Capabilities(station string) ([]any, error)
 	RawCapability(station, capType, instance string, value any) error
+
+	// The following were confirmed against a real device's Capabilities()
+	// dump (see PROTOCOL_NOTES.md) rather than guessed — see quasar.Client
+	// for exactly what's confirmed vs inferred by symmetry.
+	SayWhisper(station, text string) error
+	PlaySound(station, soundID string) error
+	StopEverything(station string) error
+	LightScene(station, sceneID string) error
 }
 
 // App bundles a connected station client with the plumbing to run
@@ -307,18 +315,56 @@ func (a *App) registerCommands() {
 	}, "execute")
 
 	d.HandleCat("Экспериментально",
-		"Скажи фразу шёпотом — родная фраза Алисы \"скажи шёпотом ...\", не выдумка этого проекта: /whisper текст",
+		"Скажи фразу шёпотом — через флаг whisper capability tts, подтверждённый на реальном устройстве, не фраза-угадайка: /whisper текст",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
 			text := dispatch.Rest(rest)
 			if text == "" {
 				return "", fmt.Errorf("нужен текст: /whisper тише едешь дальше будешь")
 			}
-			if err := a.Client.Command(station, "скажи шёпотом "+text); err != nil {
+			if err := a.Client.SayWhisper(station, text); err != nil {
 				return "", err
 			}
 			return "[шёпотом] " + text, nil
 		}, "whisper", "шёпот")
+
+	d.HandleCat("Экспериментально",
+		"Звук из библиотеки Алисы по id (см. /capabilities -> sound_play после того, как попросишь звук голосом): /sound chainsaw-1",
+		func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			if len(rest) == 0 {
+				return "", fmt.Errorf("нужен id звука: /sound chainsaw-1")
+			}
+			id := rest[0]
+			if err := a.Client.PlaySound(station, id); err != nil {
+				return "", err
+			}
+			return "[звук] " + id, nil
+		}, "sound")
+
+	d.HandleCat("Экспериментально",
+		"Жёсткий стоп всего (не то же самое, что /stop): /stopall [станция]",
+		func(ctx context.Context, args []string) (string, error) {
+			st, _ := station(args)
+			if err := a.Client.StopEverything(st); err != nil {
+				return "", err
+			}
+			return "[стоп всего]", nil
+		}, "stopall")
+
+	d.HandleCat("Экспериментально",
+		"Цветовая сцена подсветки колонки по id (см. /capabilities -> color_setting/scenes для списка на твоём устройстве): /scene night",
+		func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			if len(rest) == 0 {
+				return "", fmt.Errorf("нужен id сцены: /scene night")
+			}
+			id := rest[0]
+			if err := a.Client.LightScene(station, id); err != nil {
+				return "", err
+			}
+			return "[сцена] " + id, nil
+		}, "scene", "light")
 
 	d.HandleCat("Экспериментально",
 		"Сырые capabilities станции как есть от Яндекса — для разведки протокола: /capabilities [станция]",

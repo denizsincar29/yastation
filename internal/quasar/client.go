@@ -420,7 +420,53 @@ func (c *Client) Diagnostics() (string, error) {
 	return string(b), nil
 }
 
-// --- Experimental: raw protocol access -----------------------------------
+// --- Discovered via a real device's Capabilities() dump ------------------
+// Everything below is grounded in an actual capabilities list pulled off
+// a real speaker (not guessed) — see PROTOCOL_NOTES.md for the source
+// dump. The read-path (what Capabilities() reports as current state) is
+// confirmed; the write-path (the value shape these methods send to
+// *change* that state) is inferred by symmetry with the read shape and
+// is NOT independently confirmed beyond tts/whisper, which was tested.
+
+// SayWhisper is Say, but via the tts capability's own "whisper" field
+// instead of the "скажи шёпотом ..." natural-language phrase trick the
+// old /whisper used. Confirmed on real hardware: {"text","lang","whisper"}
+// is exactly what Capabilities() reports back for the tts capability's
+// state, so this isn't SSML and isn't a guess — it's the same field
+// Alice's own client sets.
+func (c *Client) SayWhisper(station, text string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "tts", map[string]any{
+		"text": text, "lang": "", "whisper": true,
+	})
+}
+
+// PlaySound plays one of Alice's built-in sound-library effects by id
+// (e.g. "chainsaw-1"). There's no known way to list the full catalog of
+// ids via the API — the practical way to find one is to ask Alice by
+// voice ("включи звук дождя") and then read the id back via
+// Capabilities()'s sound_play state, which reports exactly what got
+// triggered.
+func (c *Client) PlaySound(station, soundID string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "sound_play", map[string]any{"sound": soundID})
+}
+
+// StopEverything is a harder stop than Stop ("останови" — just pauses
+// media): the capability behind Alice's own all-stop behaviour, confirmed
+// via a real device's capability dump rather than guessed from a phrase.
+func (c *Client) StopEverything(station string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "stop_everything", map[string]any{})
+}
+
+// LightScene sets the speaker's LED light scene by id — the available
+// set is device-specific (see Capabilities()'s color_setting/scene
+// parameters for what a given speaker actually offers; a real device
+// reported "lava_lamp", "inactive", "night", "candle"). UNVERIFIED: only
+// the read-path {"id","name"} shape is confirmed; sending just {"id"} to
+// set it is inferred, not independently tested.
+func (c *Client) LightScene(station, sceneID string) error {
+	return c.RawCapability(station, "devices.capabilities.color_setting", "scene", map[string]any{"id": sceneID})
+}
+
 // Everything above wraps one specific, verified shape (tts text, a
 // server_action phrase, a volume 0..10 step...). Yandex's device
 // capability list has more than that per PROTOCOL_NOTES.md — sound

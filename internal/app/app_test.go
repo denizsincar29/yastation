@@ -201,13 +201,49 @@ func TestExecuteScriptMissingFile(t *testing.T) {
 	}
 }
 
-func TestWhisperWrapsTextInAlicesOwnPhrase(t *testing.T) {
+func TestWhisperUsesStructuredWhisperFlag(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
 	mustExec(t, a, "/whisper тише едешь")
 	calls := f.Calls()
-	if len(calls) != 1 || calls[0] != "cmd::скажи шёпотом тише едешь" {
+	if len(calls) != 1 || calls[0] != "whisper::тише едешь" {
 		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestSoundRequiresID(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/sound chainsaw-1")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "sound::chainsaw-1" {
+		t.Fatalf("calls=%v", calls)
+	}
+	if _, err := a.Execute(context.Background(), "/sound"); err == nil {
+		t.Fatal("expected error without an id")
+	}
+}
+
+func TestStopAll(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/stopall")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "stopall:" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestSceneRequiresID(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/scene night")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "scene::night" {
+		t.Fatalf("calls=%v", calls)
+	}
+	if _, err := a.Execute(context.Background(), "/scene"); err == nil {
+		t.Fatal("expected error without an id")
 	}
 }
 
