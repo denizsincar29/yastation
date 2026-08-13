@@ -47,22 +47,10 @@ func (f *fakeStation) Command(station, text string) error {
 }
 func (f *fakeStation) Notify(station, text string, volume float64) error { return f.record("notify") }
 func (f *fakeStation) Volume(station string, level float64) error        { return f.record("volume") }
-func (f *fakeStation) Play(station string) error                         { return f.record("play") }
-func (f *fakeStation) Pause(station string) error                        { return f.record("pause") }
-func (f *fakeStation) Stop(station string) error                         { return f.record("stop") }
-func (f *fakeStation) Next(station string) error                         { return f.record("next") }
-func (f *fakeStation) Previous(station string) error                     { return f.record("prev") }
-func (f *fakeStation) Timer(station string, minutes int, label string) error {
-	return f.record("timer")
-}
-func (f *fakeStation) Alarm(station, at, label string) error      { return f.record("alarm") }
-func (f *fakeStation) Reminder(station, text, when string) error  { return f.record("reminder") }
-func (f *fakeStation) Weather(station string) error               { return f.record("weather") }
-func (f *fakeStation) News(station string) error                  { return f.record("news") }
-func (f *fakeStation) RunScenario(name string) error              { return f.record("scenario") }
-func (f *fakeStation) ListScenarios() []string                    { return nil }
-func (f *fakeStation) Diagnostics() (string, error)               { return "ok", nil }
-func (f *fakeStation) Capabilities(station string) ([]any, error) { return nil, nil }
+func (f *fakeStation) RunScenario(name string) error                     { return f.record("scenario") }
+func (f *fakeStation) ListScenarios() []string                           { return nil }
+func (f *fakeStation) Diagnostics() (string, error)                      { return "ok", nil }
+func (f *fakeStation) Capabilities(station string) ([]any, error)        { return nil, nil }
 func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
 	return nil
 }
@@ -70,6 +58,8 @@ func (f *fakeStation) SayWhisper(station, text string) error    { return nil }
 func (f *fakeStation) PlaySound(station, soundID string) error  { return nil }
 func (f *fakeStation) StopEverything(station string) error      { return nil }
 func (f *fakeStation) LightScene(station, sceneID string) error { return nil }
+func (f *fakeStation) Weather(station string) error             { return nil }
+func (f *fakeStation) PlayMusic(station string) error           { return nil }
 
 // --- token cache -----------------------------------------------------
 

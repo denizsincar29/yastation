@@ -379,9 +379,6 @@ func (c *Client) Reminder(station, text, when string) error {
 	return c.Command(station, fmt.Sprintf("напомни %s: %s", when, text))
 }
 
-func (c *Client) Weather(station string) error { return c.Command(station, "какая погода") }
-func (c *Client) News(station string) error    { return c.Command(station, "включи новости") }
-
 // RunScenario runs one of the user's *own* smart-home scenarios by name
 // (not a yastation trigger scenario).
 func (c *Client) RunScenario(name string) error {
@@ -438,6 +435,27 @@ func (c *Client) SayWhisper(station, text string) error {
 	return c.RawCapability(station, "devices.capabilities.quasar", "tts", map[string]any{
 		"text": text, "lang": "", "whisper": true,
 	})
+}
+
+// Weather triggers Alice's weather report via the structured "weather"
+// capability instead of a phrase ("какая погода") that has to be
+// understood as natural language — confirmed present on a real device's
+// capabilities dump, but the write-path (does an empty value trigger it
+// the way an empty state reads?) is inferred by symmetry, not
+// independently confirmed.
+func (c *Client) Weather(station string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "weather", map[string]any{})
+}
+
+// PlayMusic triggers Alice's own "play some music" action via the
+// structured "music_play" capability. Not the same as Play ("продолжить"
+// — resumes paused playback); this is closer to "play me something",
+// same distinction as the real client's own separate weather/music_play
+// vs text_action capabilities. Confirmed present on a real device's
+// capabilities dump; write-path inferred by symmetry, same caveat as
+// Weather.
+func (c *Client) PlayMusic(station string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "music_play", map[string]any{"play_in_background": true})
 }
 
 // PlaySound plays one of Alice's built-in sound-library effects by id

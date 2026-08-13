@@ -53,6 +53,8 @@ type StationAPI interface {
 	PlaySound(station, soundID string) error
 	StopEverything(station string) error
 	LightScene(station, sceneID string) error
+	Weather(station string) error
+	PlayMusic(station string) error
 }
 
 // App bundles a connected station client with the plumbing to run
@@ -365,6 +367,26 @@ func (a *App) registerCommands() {
 			}
 			return "[сцена] " + id, nil
 		}, "scene", "light")
+
+	d.HandleCat("Экспериментально",
+		"Погода через структурную capability вместо фразы \"какая погода\" — подтверждено на реальном дампе, сработает ли запуск не проверено отдельно: /weather [станция]",
+		func(ctx context.Context, args []string) (string, error) {
+			st, _ := station(args)
+			if err := a.Client.Weather(st); err != nil {
+				return "", err
+			}
+			return "[погода]", nil
+		}, "weather")
+
+	d.HandleCat("Экспериментально",
+		"Запустить музыку через структурную capability music_play (не то же самое, что /play — тот просто возобновляет паузу): /music [станция]",
+		func(ctx context.Context, args []string) (string, error) {
+			st, _ := station(args)
+			if err := a.Client.PlayMusic(st); err != nil {
+				return "", err
+			}
+			return "[музыка]", nil
+		}, "music")
 
 	d.HandleCat("Экспериментально",
 		"Сырые capabilities станции как есть от Яндекса — для разведки протокола: /capabilities [станция]",

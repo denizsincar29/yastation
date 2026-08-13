@@ -71,3 +71,5 @@ func (f *fakeStation) StopEverything(station string) error {
 func (f *fakeStation) LightScene(station, sceneID string) error {
 	return f.record(fmt.Sprintf("scene:%s:%s", station, sceneID))
 }
+func (f *fakeStation) Weather(station string) error   { return f.record("weather:" + station) }
+func (f *fakeStation) PlayMusic(station string) error { return f.record("music:" + station) }
