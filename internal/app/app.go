@@ -177,6 +177,7 @@ func (a *App) registerCommands() {
 
 	// Free text with no "/" is TTS. A leading "- " is a voice-command
 	// alias for /cmd, e.g. "- какая погода" instead of "/cmd какая погода".
+	// A leading "~" is the whole-line whisper shortcut, mirroring "- ".
 	d.Default = func(ctx context.Context, text string) (string, error) {
 		if rest, ok := strings.CutPrefix(text, "- "); ok {
 			if err := a.Client.Command("", rest); err != nil {
@@ -184,23 +185,33 @@ func (a *App) registerCommands() {
 			}
 			return "Алиса услышала команду: " + rest, nil
 		}
-		if err := a.Client.Say("", text); err != nil {
-			return "", err
+		if rest, ok := strings.CutPrefix(text, "~"); ok {
+			rest = strings.TrimSpace(rest)
+			if rest == "" {
+				return "", fmt.Errorf("после ~ нужен текст")
+			}
+			expanded, err := expandSoundTags(rest)
+			if err != nil {
+				return "", err
+			}
+			if err := a.Client.SayWhisper("", expanded); err != nil {
+				return "", err
+			}
+			return "[шёпотом] " + rest, nil
 		}
-		return "Алиса сказала: " + text, nil
+		return speak(a.Client, "", text)
 	}
 
-	d.HandleCat("Основное", "Сказать текст через станцию (TTS)", func(ctx context.Context, args []string) (string, error) {
-		station, rest := station(args)
-		text := dispatch.Rest(rest)
-		if text == "" {
-			return "", fmt.Errorf("нужен текст: /say привет")
-		}
-		if err := a.Client.Say(station, text); err != nil {
-			return "", err
-		}
-		return "Алиса сказала: " + text, nil
-	}, "say", "s", "tts")
+	d.HandleCat("Основное",
+		"Сказать текст через станцию (TTS). ((текст)) — шёпотом отдельной репликой (слить с обычной речью в одну нельзя — целиком строку шёпотом: ~текст или /whisper); [запрос] — вставить встроенный звук Алисы прямо в речь: /say привет ((это по секрету)) [гонг]",
+		func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			text := dispatch.Rest(rest)
+			if text == "" {
+				return "", fmt.Errorf("нужен текст: /say привет")
+			}
+			return speak(a.Client, station, text)
+		}, "say", "s", "tts")
 
 	d.HandleCat("Основное", "Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается", func(ctx context.Context, args []string) (string, error) {
 		station, rest := station(args)
@@ -324,14 +335,18 @@ func (a *App) registerCommands() {
 	}, "execute")
 
 	d.HandleCat("Экспериментально",
-		"Скажи фразу шёпотом — через флаг whisper capability tts, подтверждённый на реальном устройстве, не фраза-угадайка: /whisper текст",
+		"Скажи фразу шёпотом — через флаг whisper capability tts, подтверждённый на реальном устройстве, не фраза-угадайка. Можно вставить звук через [запрос]: /whisper текст",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
 			text := dispatch.Rest(rest)
 			if text == "" {
 				return "", fmt.Errorf("нужен текст: /whisper тише едешь дальше будешь")
 			}
-			if err := a.Client.SayWhisper(station, text); err != nil {
+			expanded, err := expandSoundTags(text)
+			if err != nil {
+				return "", err
+			}
+			if err := a.Client.SayWhisper(station, expanded); err != nil {
 				return "", err
 			}
 			return "[шёпотом] " + text, nil

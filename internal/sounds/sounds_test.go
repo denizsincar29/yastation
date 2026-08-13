@@ -72,6 +72,15 @@ func TestFindSpeakerAudioBySlugSingleMatch(t *testing.T) {
 	}
 }
 
+func TestFindSpeakerAudioByFullSlugWithVariantNumber(t *testing.T) {
+	// "win 1" (space instead of dash) should resolve to exactly win-1,
+	// not be ambiguous with win-2/win-3.
+	id, _, ok := FindSpeakerAudio("win 1")
+	if !ok || id != "alice-sounds-game-win-1" {
+		t.Fatalf("id=%q ok=%v", id, ok)
+	}
+}
+
 func TestFindSpeakerAudioByRussianSubstring(t *testing.T) {
 	id, _, ok := FindSpeakerAudio("бензопила")
 	if !ok || id != "alice-sounds-things-chainsaw-1" {
