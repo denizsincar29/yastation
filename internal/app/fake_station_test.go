@@ -59,3 +59,15 @@ func (f *fakeStation) Capabilities(station string) ([]any, error) {
 func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
 	return f.record(fmt.Sprintf("raw:%s:%s:%s:%v", station, capType, instance, value))
 }
+func (f *fakeStation) SayWhisper(station, text string) error {
+	return f.record(fmt.Sprintf("whisper:%s:%s", station, text))
+}
+func (f *fakeStation) PlaySound(station, soundID string) error {
+	return f.record(fmt.Sprintf("sound:%s:%s", station, soundID))
+}
+func (f *fakeStation) StopEverything(station string) error {
+	return f.record("stopall:" + station)
+}
+func (f *fakeStation) LightScene(station, sceneID string) error {
+	return f.record(fmt.Sprintf("scene:%s:%s", station, sceneID))
+}
