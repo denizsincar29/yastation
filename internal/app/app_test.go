@@ -201,6 +201,59 @@ func TestExecuteScriptMissingFile(t *testing.T) {
 	}
 }
 
+func TestWhisperWrapsTextInAlicesOwnPhrase(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/whisper тише едешь")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "cmd::скажи шёпотом тише едешь" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestCapabilitiesReturnsJSON(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.Execute(context.Background(), "/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "stub-capability") {
+		t.Fatalf("out=%q", out)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "caps:" {
+		t.Fatalf("calls=%v", f.Calls())
+	}
+}
+
+func TestRawSendsCapabilityWithJSONValue(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, `/raw devices.capabilities.quasar tts {"text":"привет"}`)
+	calls := f.Calls()
+	if len(calls) != 1 || !strings.Contains(calls[0], "devices.capabilities.quasar:tts") || !strings.Contains(calls[0], "привет") {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestRawSendsCapabilityWithPlainStringValueWhenNotJSON(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/raw devices.capabilities.quasar.server_action text_action включи новости")
+	calls := f.Calls()
+	if len(calls) != 1 || !strings.Contains(calls[0], "включи новости") {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestRawRequiresThreeArgs(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/raw onlytype onlyinstance"); err == nil {
+		t.Fatal("expected error for missing value")
+	}
+}
+
 func TestEnqueueDoesNotBlockCaller(t *testing.T) {
 	a, _ := newTestApp()
 	defer a.Close()

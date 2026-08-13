@@ -419,3 +419,63 @@ func (c *Client) Diagnostics() (string, error) {
 	}, "", "  ")
 	return string(b), nil
 }
+
+// --- Experimental: raw protocol access -----------------------------------
+// Everything above wraps one specific, verified shape (tts text, a
+// server_action phrase, a volume 0..10 step...). Yandex's device
+// capability list has more than that per PROTOCOL_NOTES.md — sound
+// libraries, do-not-disturb, brightness, whatever a given speaker
+// reports — none of it modeled here because none of it is confirmed
+// against real hardware. Capabilities/RawCapability are the escape
+// hatch: inspect what a device actually offers, then poke it directly,
+// without waiting for a dedicated typed method.
+
+// Capabilities returns the raw capabilities Yandex reported for the
+// given device in the last Refresh(), exactly as received from
+// /m/v3/user/devices (untouched []any — this project doesn't model the
+// shape). Look here to find instance names before guessing at
+// RawCapability arguments.
+func (c *Client) Capabilities(station string) ([]any, error) {
+	dev, err := c.selectSpeaker(station)
+	if err != nil {
+		return nil, err
+	}
+	return dev.Capabilities, nil
+}
+
+// RawCapability sends one arbitrary capability action to a device via
+// the same throwaway-per-device-scenario mechanism Say/Command/Volume
+// use internally (see sendCloud/ensureScenario) — just with the
+// capability type/instance/value spelled out by hand instead of one of
+// the built-in shapes. value is sent as-is (a string, a map, whatever
+// json.Marshal makes of it).
+//
+// EXPERIMENTAL and UNVERIFIED beyond the two shapes this project already
+// knows work ("devices.capabilities.quasar"/"tts" and
+// "devices.capabilities.quasar.server_action"/"text_action" — see
+// buildTTSScenario/buildCommandScenario). Any other capType/instance is
+// a guess based on what Capabilities() reports; if Yandex rejects it,
+// that error comes back as-is, nothing is assumed about why.
+func (c *Client) RawCapability(station, capType, instance string, value any) error {
+	dev, err := c.selectSpeaker(station)
+	if err != nil {
+		return err
+	}
+	build := Scenario{
+		Name:     "yastation: " + dev.Name,
+		Icon:     "home",
+		Triggers: scenarioTrigger(dev),
+		Steps: []ScenarioStep{scenarioActionStep(dev.ID, ScenarioCapability{
+			Type:  capType,
+			State: ScenarioCapabilityState{Instance: instance, Value: value},
+		})},
+	}
+	id, err := c.ensureScenario(dev, "raw", build)
+	if err != nil {
+		return err
+	}
+	if err := c.updateScenarioPhrase(id, build); err != nil {
+		return err
+	}
+	return c.runScenarioByID(id)
+}
