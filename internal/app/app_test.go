@@ -63,6 +63,96 @@ func TestDashPrefixIsCommandAlias(t *testing.T) {
 	}
 }
 
+func TestTildePrefixIsWhisperAlias(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.Execute(context.Background(), "~тише едешь")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "[шёпотом] тише едешь" {
+		t.Fatalf("out=%q", out)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "whisper::тише едешь" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestTildeWithoutTextErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "~"); err == nil {
+		t.Fatal("expected error for bare ~")
+	}
+}
+
+func TestSayWithWhisperSegmentSendsTwoSeparateCalls(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/say привет ((это по секрету)) пока")
+	calls := f.Calls()
+	want := []string{"say::привет", "whisper::это по секрету", "say::пока"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls=%v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("call %d: got %q want %q", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestSayWithoutWhisperMarkupIsUnaffected(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/say обычная фраза без разметки")
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "say::обычная фраза без разметки" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestSayWithSoundTagExpandsToSpeakerTag(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	mustExec(t, a, "/say поздравляю с победой [boot]")
+	calls := f.Calls()
+	want := `say::поздравляю с победой <speaker audio="alice-sounds-game-boot-1.opus">`
+	if len(calls) != 1 || calls[0] != want {
+		t.Fatalf("calls=%v want=%q", calls, want)
+	}
+}
+
+func TestSayWithUnknownSoundTagErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/say привет [zzzznonexistent]"); err == nil {
+		t.Fatal("expected error for an unmatched sound query")
+	}
+}
+
+func TestSayWithAmbiguousSoundTagErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	// "win" matches win-1/2/3 in the games category.
+	if _, err := a.Execute(context.Background(), "/say [game win]"); err == nil {
+		t.Fatal("expected error for an ambiguous sound query")
+	}
+}
+
+func TestSplitWhisperSegmentsUnterminatedRunsToEnd(t *testing.T) {
+	segs := splitWhisperSegments("привет ((шёпот без закрытия")
+	if len(segs) != 2 {
+		t.Fatalf("segs=%v", segs)
+	}
+	if segs[0].Whisper || segs[0].Text != "привет" {
+		t.Fatalf("segs[0]=%+v", segs[0])
+	}
+	if !segs[1].Whisper || segs[1].Text != "шёпот без закрытия" {
+		t.Fatalf("segs[1]=%+v", segs[1])
+	}
+}
+
 func TestVolumeParsesFloat(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()

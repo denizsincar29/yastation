@@ -92,71 +92,61 @@ func slug(id string) string {
 // slug or the Russian name. Returns ok=false with candidates listing
 // every partial match when the query is ambiguous (more than one hit)
 // or matches nothing at all.
-func FindEffect(query string) (id string, candidates []Effect, ok bool) {
+// find is the shared fuzzy-match engine behind FindEffect and
+// FindSpeakerAudio: exact id match first; then an id whose "full slug"
+// (id with "-" turned into spaces, digits kept — e.g. "win 1") or "base
+// slug" (same, but with the trailing "-N" variant number stripped —
+// "win") exactly equals the query; then a substring match against the
+// full slug or the Russian name. Ambiguous (2+ partial matches) or
+// empty results come back as candidates with ok=false rather than
+// guessing.
+func find[T any](query string, items []T, id func(T) string, name func(T) string) (matchID string, candidates []T, ok bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return "", nil, false
 	}
-	for _, e := range effects {
-		if strings.EqualFold(e.ID, q) {
-			return e.ID, nil, true
+	for _, it := range items {
+		if strings.EqualFold(id(it), q) {
+			return id(it), nil, true
 		}
 	}
-	var exact, partial []Effect
-	for _, e := range effects {
-		s := strings.ToLower(slug(e.ID))
-		if s == q {
-			exact = append(exact, e)
-			continue
-		}
-		if strings.Contains(s, q) || strings.Contains(strings.ToLower(e.NameRU), q) {
-			partial = append(partial, e)
+	var exact, partial []T
+	for _, it := range items {
+		full := strings.ToLower(strings.ReplaceAll(id(it), "-", " "))
+		base := strings.ToLower(slug(id(it)))
+		switch {
+		case full == q || base == q:
+			exact = append(exact, it)
+		case strings.Contains(full, q) || strings.Contains(strings.ToLower(name(it)), q):
+			partial = append(partial, it)
 		}
 	}
 	if len(exact) == 1 {
-		return exact[0].ID, nil, true
+		return id(exact[0]), nil, true
 	}
 	if len(exact) > 1 {
 		return "", exact, false
 	}
 	if len(partial) == 1 {
-		return partial[0].ID, nil, true
+		return id(partial[0]), nil, true
 	}
 	return "", partial, false
 }
 
+// FindEffect fuzzy-matches query (Russian or English, full or partial —
+// e.g. "explosion", "win 1", "Раскат грома 1") against the sound_play
+// catalog. See find for the exact matching rules.
+func FindEffect(query string) (id string, candidates []Effect, ok bool) {
+	return find(query, effects,
+		func(e Effect) string { return e.ID },
+		func(e Effect) string { return e.NameRU })
+}
+
 // FindSpeakerAudio is FindEffect for the SpeakerAudio catalog.
 func FindSpeakerAudio(query string) (fullID string, candidates []SpeakerAudio, ok bool) {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return "", nil, false
-	}
-	for _, a := range speakerAudios {
-		if strings.EqualFold(a.FullID, q) {
-			return a.FullID, nil, true
-		}
-	}
-	var exact, partial []SpeakerAudio
-	for _, a := range speakerAudios {
-		s := strings.ToLower(slug(a.FullID))
-		if s == q {
-			exact = append(exact, a)
-			continue
-		}
-		if strings.Contains(s, q) || strings.Contains(strings.ToLower(a.NameRU), q) {
-			partial = append(partial, a)
-		}
-	}
-	if len(exact) == 1 {
-		return exact[0].FullID, nil, true
-	}
-	if len(exact) > 1 {
-		return "", exact, false
-	}
-	if len(partial) == 1 {
-		return partial[0].FullID, nil, true
-	}
-	return "", partial, false
+	return find(query, speakerAudios,
+		func(a SpeakerAudio) string { return a.FullID },
+		func(a SpeakerAudio) string { return a.NameRU })
 }
 
 // FormatCandidates renders an ambiguous/failed lookup's candidates as a
