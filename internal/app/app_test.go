@@ -254,6 +254,22 @@ func TestRawRequiresThreeArgs(t *testing.T) {
 	}
 }
 
+func TestExecuteArgsBypassesLineTokenizing(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.ExecuteArgs(context.Background(), "say", []string{`hello "world"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != `say::hello "world"` {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
 func TestEnqueueDoesNotBlockCaller(t *testing.T) {
 	a, _ := newTestApp()
 	defer a.Close()

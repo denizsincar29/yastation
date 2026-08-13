@@ -117,6 +117,29 @@ func (d *Dispatcher) Execute(ctx context.Context, line string) (string, error) {
 	return cmd.handler(ctx, args)
 }
 
+// ExecuteArgs runs the named command directly with already-split args
+// (no "/prefix line" tokenizing/quoting round-trip) — for callers that
+// already have a name and a []string, like yastation-server's
+// per-command HTTP endpoints (see cmd/yastation-server).
+func (d *Dispatcher) ExecuteArgs(ctx context.Context, name string, args []string) (string, error) {
+	cmd, ok := d.byName[name]
+	if !ok {
+		return "", fmt.Errorf("неизвестная команда: %s%s (наберите %shelp)", d.Prefix, name, d.Prefix)
+	}
+	return cmd.handler(ctx, args)
+}
+
+// Names returns every registered command's canonical name plus its
+// aliases in one flat list. Used by yastation-server to auto-register one
+// HTTP endpoint per command.
+func (d *Dispatcher) Names() []string {
+	var names []string
+	for n := range d.byName {
+		names = append(names, n)
+	}
+	return names
+}
+
 // Help renders every registered command, grouped by category (in the
 // order categories were first registered) and sorted alphabetically
 // within each category.

@@ -102,6 +102,22 @@ func (a *App) Execute(ctx context.Context, commandLine string) (string, error) {
 	return out, err
 }
 
+// ExecuteArgs runs the named command directly with already-split args,
+// through the same single-worker queue as Execute (so it can't race a
+// concurrent /command call touching the same speaker's scenario).
+func (a *App) ExecuteArgs(ctx context.Context, name string, args []string) (string, error) {
+	var out string
+	err := a.Queue.EnqueueWait(ctx, queue.Job{
+		Label: "/" + name,
+		Run: func() error {
+			var runErr error
+			out, runErr = a.Dispatcher.ExecuteArgs(ctx, name, args)
+			return runErr
+		},
+	})
+	return out, err
+}
+
 // Close stops the queue, waiting for any in-flight job to finish.
 func (a *App) Close() {
 	a.Queue.Close()

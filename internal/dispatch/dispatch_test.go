@@ -128,6 +128,51 @@ func TestQuestionMarkOnUnknownCommandErrors(t *testing.T) {
 	}
 }
 
+func TestExecuteArgsRunsWithoutTokenizing(t *testing.T) {
+	d := New()
+	var gotArgs []string
+	d.Handle("x", func(ctx context.Context, args []string) (string, error) {
+		gotArgs = args
+		return "ok", nil
+	}, "timer")
+
+	// An arg containing a quote character would be unsafe/impossible to
+	// round-trip through a rebuilt "/timer ..." line and the tokenizer's
+	// quoting; ExecuteArgs skips that entirely.
+	out, err := d.ExecuteArgs(context.Background(), "timer", []string{"10", `say "hi"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" || len(gotArgs) != 2 || gotArgs[1] != `say "hi"` {
+		t.Fatalf("out=%q gotArgs=%v", out, gotArgs)
+	}
+}
+
+func TestExecuteArgsUnknownCommandErrors(t *testing.T) {
+	d := New()
+	if _, err := d.ExecuteArgs(context.Background(), "nope", nil); err == nil {
+		t.Fatal("expected error for unknown command")
+	}
+}
+
+func TestNamesIncludesAliases(t *testing.T) {
+	d := New()
+	noop := func(ctx context.Context, args []string) (string, error) { return "", nil }
+	d.Handle("x", noop, "cmd", "c", "ask")
+
+	names := d.Names()
+	want := map[string]bool{"cmd": true, "c": true, "ask": true}
+	got := map[string]bool{}
+	for _, n := range names {
+		got[n] = true
+	}
+	for n := range want {
+		if !got[n] {
+			t.Fatalf("Names() missing %q, got %v", n, names)
+		}
+	}
+}
+
 func TestBareQuestionMarkStillWorksAsHelpAlias(t *testing.T) {
 	d := New()
 	called := false
