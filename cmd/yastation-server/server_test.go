@@ -385,3 +385,168 @@ func TestHandleCommandBYOTFailsClosedOnBadToken(t *testing.T) {
 		t.Fatalf("expected a failure status for a bogus token, got 200: %s", rec.Body.String())
 	}
 }
+
+// --- per-command endpoints -------------------------------------------
+
+func testCustomCfg() *app.CustomCommandConfig {
+	return &app.CustomCommandConfig{Commands: []app.CustomCommandDef{
+		{
+			Name:     "timer",
+			Params:   []string{"minutes", "label?"},
+			Template: "поставь таймер на $minutes минут $label",
+			Kind:     "command",
+		},
+	}}
+}
+
+func TestHandleCommandByNameConfigCommandUsesNamedParams(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	if err := a.RegisterCustomCommands(testCustomCfg()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"minutes":"10","label":"проверить духовку","station":"Кухня"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	calls := f.Calls()
+	if len(calls) != 1 || !strings.Contains(calls[0], "Кухня") || !strings.Contains(calls[0], "10 минут проверить духовку") {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestHandleCommandByNameConfigCommandOptionalParamOmitted(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	if err := a.RegisterCustomCommands(testCustomCfg()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"minutes":"5"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCommandByNameConfigCommandMissingRequiredParam(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	if err := a.RegisterCustomCommands(testCustomCfg()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"label":"духовку"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCommandByNameBuiltinUsesArgsArray(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/say", strings.NewReader(`{"args":["привет"],"station":"Кухня"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "say:Кухня:привет" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestHandleCommandByNameUnknownCommand(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/nope", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCommandsListIncludesBuiltinsAndConfigParams(t *testing.T) {
+	h := handleCommandsList(testCustomCfg(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/commands", nil)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var endpoints []struct {
+		Name   string   `json:"name"`
+		Params []string `json:"params,omitempty"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &endpoints); err != nil {
+		t.Fatal(err)
+	}
+	found := map[string][]string{}
+	for _, e := range endpoints {
+		found[e.Name] = e.Params
+	}
+	if _, ok := found["say"]; !ok {
+		t.Fatalf("expected builtin 'say' in list: %v", found)
+	}
+	params, ok := found["timer"]
+	if !ok || len(params) != 2 || params[0] != "minutes" || params[1] != "label?" {
+		t.Fatalf("expected timer params [minutes label?], got %v (ok=%v)", params, ok)
+	}
+}
+
+func TestArgsFromNamedParamsMissingRequired(t *testing.T) {
+	_, missing := argsFromNamedParams([]string{"when", "text"}, map[string]json.RawMessage{
+		"when": json.RawMessage(`"завтра"`),
+	})
+	if missing != "text" {
+		t.Fatalf("missing=%q", missing)
+	}
+}
+
+func TestArgsFromNamedParamsOptionalDefaultsEmpty(t *testing.T) {
+	argv, missing := argsFromNamedParams([]string{"minutes", "label?"}, map[string]json.RawMessage{
+		"minutes": json.RawMessage(`"10"`),
+	})
+	if missing != "" {
+		t.Fatalf("missing=%q", missing)
+	}
+	if len(argv) != 2 || argv[0] != "10" || argv[1] != "" {
+		t.Fatalf("argv=%v", argv)
+	}
+}

@@ -6,6 +6,15 @@
 // scenario; each request waits for its own actual result before
 // answering (see internal/app.App.Execute).
 //
+// Two ways to send a command:
+//   - POST /command — one endpoint, a "/name ..." line or a
+//     {"text": "..."} convenience form (see commandRequest).
+//   - POST /commands/{name} — one auto-registered URL per dispatcher
+//     command (GET /commands lists them all); config-driven commands
+//     (config.json.default, --config/commands.json) take their declared
+//     param names directly as JSON fields instead of a line to parse —
+//     see handleCommandByName's doc comment for the exact shape.
+//
 // Two auth modes:
 //   - "Bring your own token" (default): a request carrying an
 //     X-Yandex-Token header runs against *that* Yandex account — but
@@ -47,6 +56,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +145,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, defaultsCfg, customCfg, loadAccess))
+	mux.HandleFunc("GET /commands", handleCommandsList(defaultsCfg, customCfg))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, tokenClients, defaultsCfg, customCfg, loadAccess))
 	mux.HandleFunc("GET /schedules", handleSchedules(a))
 	mux.HandleFunc("GET /stations", handleStations(tokenClients, loadAccess))
 
@@ -352,41 +364,50 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaults
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
+		runOnAccount(w, r, defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess,
+			func(ctx context.Context, a *app.App) (string, error) { return a.Execute(ctx, line) })
+	}
+}
 
-		// Bring-your-own-token mode: run against the caller's own Yandex
-		// account instead of the server's default one — if that account
-		// is on the allowlist.
-		if xToken := r.Header.Get("X-Yandex-Token"); xToken != "" {
-			client, _, err := tokenClients.get(xToken, loadAccess())
-			if err != nil {
-				writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
-				return
-			}
-			tmpApp := buildApp(client, defaultsCfg, customCfg)
-			defer tmpApp.Close()
-			out, err := tmpApp.Execute(ctx, line)
-			if err != nil {
-				writeJSON(w, http.StatusUnprocessableEntity, commandResponse{Error: err.Error()})
-				return
-			}
-			writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
+// runOnAccount is the auth/account-selection logic shared by every
+// endpoint that actually runs a command: bring-your-own-token (checked
+// against the allowlist) if X-Yandex-Token is present, otherwise the
+// server's own default account if it has one. run does the actual work
+// once the right *app.App has been picked.
+func runOnAccount(w http.ResponseWriter, r *http.Request, defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig, loadAccess func() *access.List, run func(ctx context.Context, a *app.App) (string, error)) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	// Bring-your-own-token mode: run against the caller's own Yandex
+	// account instead of the server's default one — if that account is
+	// on the allowlist.
+	if xToken := r.Header.Get("X-Yandex-Token"); xToken != "" {
+		client, _, err := tokenClients.get(xToken, loadAccess())
+		if err != nil {
+			writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
 			return
 		}
-
-		if defaultApp == nil {
-			writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (BYOT по умолчанию) — передайте свой X-Yandex-Token"})
-			return
-		}
-
-		out, err := defaultApp.Execute(ctx, line)
+		tmpApp := buildApp(client, defaultsCfg, customCfg)
+		defer tmpApp.Close()
+		out, err := run(ctx, tmpApp)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, commandResponse{Error: err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
+		return
 	}
+
+	if defaultApp == nil {
+		writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (BYOT по умолчанию) — передайте свой X-Yandex-Token"})
+		return
+	}
+	out, err := run(ctx, defaultApp)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, commandResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, commandResponse{OK: true, Output: out})
 }
 
 // statusForTokenError picks the HTTP status for a tokenClientCache.get
@@ -399,6 +420,154 @@ func statusForTokenError(err error) int {
 		return http.StatusForbidden
 	}
 	return http.StatusUnauthorized
+}
+
+// handleCommandByName is the auto-registered per-command endpoint:
+// POST /commands/{name} — one URL per dispatcher command (built-ins like
+// "say"/"volume" and every command loaded from config.json/commands.json
+// alike, see Dispatcher.Names()), instead of building a "/name ..." line
+// by hand against the generic /command endpoint.
+//
+// For commands with a declared param list (anything from config.json or
+// a custom commands.json — see internal/app.CustomCommandDef), the body
+// takes those exact param names as JSON fields:
+//
+//	POST /commands/timer  {"minutes": "10", "label": "проверить духовку"}
+//
+// Built-in Go-coded commands (say, cmd, notify, ...) never had a
+// declared param list — they parse their own free-form args — so they
+// fall back to a generic positional form instead:
+//
+//	POST /commands/say  {"args": ["привет"]}
+//
+// station works the same way as /command: a top-level "station" field in
+// the body, or the X-Station header.
+func handleCommandByName(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig, loadAccess func() *access.List) http.HandlerFunc {
+	paramNames := paramNamesByCommand(defaultsCfg, customCfg)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужно имя команды в пути: /commands/<name>"})
+			return
+		}
+
+		body := map[string]json.RawMessage{}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, commandResponse{Error: "невалидный JSON: " + err.Error()})
+				return
+			}
+		}
+
+		station := ""
+		if raw, ok := body["station"]; ok {
+			if err := json.Unmarshal(raw, &station); err != nil {
+				writeJSON(w, http.StatusBadRequest, commandResponse{Error: `поле "station" должно быть строкой`})
+				return
+			}
+		}
+		if h := r.Header.Get("X-Station"); h != "" && station == "" {
+			station = h
+		}
+
+		var argv []string
+		if params, ok := paramNames[name]; ok {
+			args, missing := argsFromNamedParams(params, body)
+			if missing != "" {
+				writeJSON(w, http.StatusBadRequest, commandResponse{Error: fmt.Sprintf("нужно поле %q", missing)})
+				return
+			}
+			argv = args
+		} else if raw, ok := body["args"]; ok {
+			if err := json.Unmarshal(raw, &argv); err != nil {
+				writeJSON(w, http.StatusBadRequest, commandResponse{Error: `поле "args" должно быть массивом строк`})
+				return
+			}
+		}
+		if station != "" {
+			argv = append([]string{"station=" + station}, argv...)
+		}
+
+		runOnAccount(w, r, defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess,
+			func(ctx context.Context, a *app.App) (string, error) { return a.ExecuteArgs(ctx, name, argv) })
+	}
+}
+
+// paramNamesByCommand indexes config-driven commands (config.json.default
+// plus any --config/YASTATION_COMMANDS_FILE commands.json) by name and
+// alias, to their declared Params (a "?" suffix marks an optional
+// trailing param, same as internal/app.CustomCommandDef.Params) — this is
+// what lets /commands/{name} accept named JSON fields instead of a bare
+// "args" array for these commands specifically. Built-in Go-coded
+// commands never declared a param list and simply aren't in this map.
+func paramNamesByCommand(cfgs ...*app.CustomCommandConfig) map[string][]string {
+	out := map[string][]string{}
+	for _, cfg := range cfgs {
+		if cfg == nil {
+			continue
+		}
+		for _, def := range cfg.Commands {
+			for _, n := range append([]string{def.Name}, def.Aliases...) {
+				out[n] = def.Params
+			}
+		}
+	}
+	return out
+}
+
+// argsFromNamedParams pulls string values out of body by the declared
+// param names, in order — the same optional-trailing-param rule as
+// internal/app.bindCustomParams: a "?"-suffixed name may be absent from
+// body, and comes out as "". Returns the name of the first missing
+// required field as missing, or "" if every required field was present.
+func argsFromNamedParams(params []string, body map[string]json.RawMessage) (argv []string, missing string) {
+	for _, p := range params {
+		name := strings.TrimSuffix(p, "?")
+		optional := strings.HasSuffix(p, "?")
+		raw, present := body[name]
+		if !present {
+			if !optional {
+				return nil, name
+			}
+			argv = append(argv, "")
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			// Not a JSON string (e.g. a bare number) — fall back to its
+			// literal JSON text rather than rejecting the request.
+			s = strings.Trim(string(raw), `"`)
+		}
+		argv = append(argv, s)
+	}
+	return argv, ""
+}
+
+// handleCommandsList answers GET /commands with every auto-registered
+// per-command endpoint name, plus (for config-driven commands) the field
+// names its POST /commands/{name} body accepts.
+func handleCommandsList(defaultsCfg, customCfg *app.CustomCommandConfig) http.HandlerFunc {
+	// A throwaway App with a nil Client only to read off its registered
+	// command names — safe because Names() just walks the handler table,
+	// it never calls a handler (which is the only thing that would ever
+	// touch Client).
+	names := buildApp(nil, defaultsCfg, customCfg).Dispatcher.Names()
+	sort.Strings(names)
+	paramNames := paramNamesByCommand(defaultsCfg, customCfg)
+
+	type endpointJSON struct {
+		Name   string   `json:"name"`
+		Params []string `json:"params,omitempty"`
+	}
+	endpoints := make([]endpointJSON, 0, len(names))
+	for _, n := range names {
+		endpoints = append(endpoints, endpointJSON{Name: n, Params: paramNames[n]})
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, endpoints)
+	}
 }
 
 type stationJSON struct {
