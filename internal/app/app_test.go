@@ -304,9 +304,9 @@ func TestWhisperUsesStructuredWhisperFlag(t *testing.T) {
 func TestSoundFuzzyMatchByName(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
-	mustExec(t, a, "/sound свисток чайника")
+	mustExec(t, a, "/sound кукушка в часах")
 	calls := f.Calls()
-	if len(calls) != 1 || calls[0] != "sound::kettle-whistle-1" {
+	if len(calls) != 1 || calls[0] != "sound::cuckoo-clock-1" {
 		t.Fatalf("calls=%v", calls)
 	}
 	if _, err := a.Execute(context.Background(), "/sound"); err == nil {
@@ -317,9 +317,13 @@ func TestSoundFuzzyMatchByName(t *testing.T) {
 func TestSoundAmbiguousQueryErrors(t *testing.T) {
 	a, _ := newTestApp()
 	defer a.Close()
-	// explosion-1 and explosion-2 both match "explosion" — must not
-	// silently pick one.
-	if _, err := a.Execute(context.Background(), "/sound explosion"); err == nil {
+	// bell-1 and bell-2 both match "bell" — must not silently pick one.
+	// (kettle-whistle-1/explosion-2 used to be the examples here, but
+	// cmd/yastation-soundcheck-apply removed kettle-whistle-1 entirely
+	// and made "explosion" unambiguous after a real device confirmed
+	// only kettle-whistle-1's sibling ids don't exist / explosion-2
+	// doesn't exist.)
+	if _, err := a.Execute(context.Background(), "/sound bell"); err == nil {
 		t.Fatal("expected error for an ambiguous query")
 	}
 }

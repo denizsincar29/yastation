@@ -12,12 +12,18 @@
 //     different mechanism (skill-dialog TTS markup, not a smart-home
 //     capability), confirmed by hand on real hardware.
 //
-// Both catalogs are transcribed data (the sound_play one from a
-// user-provided list matching a real device's capability state, the
-// speaker_audio one scraped from Yandex's own docs) — not derived or
-// guessed, but also not exhaustive: sound_play in particular has no
-// documented way to list its full id space, so entries missing here
-// simply aren't looked up yet.
+// speaker_audio is transcribed from Yandex's own docs (not derived or
+// guessed, but not exhaustive either — no full id space is documented).
+//
+// sound_play has no documented catalog at all: the entries here started
+// as a hand-assembled list of plausible ids (many "-2"/"-3" variants
+// guessed by symmetry from a confirmed "-1"), only one of which
+// (chainsaw-1) was originally checked against a real capabilities dump.
+// The list has since been re-verified end-to-end against a real device
+// with cmd/yastation-soundcheck: 33 of the original ~95 guessed ids
+// actually work, the rest returned BAD_REQUEST and were removed by
+// cmd/yastation-soundcheck-apply. Every id currently in sound_play.json
+// is confirmed, not guessed.
 package sounds
 
 import (
