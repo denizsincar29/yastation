@@ -1,97 +1,167 @@
 [
-  {"category": "Игры и интерфейс", "name_ru": "Победа 1", "id": "win-1"},
-  {"category": "Игры и интерфейс", "name_ru": "Победа 2", "id": "win-2"},
-  {"category": "Игры и интерфейс", "name_ru": "Победа 3", "id": "win-3"},
-  {"category": "Игры и интерфейс", "name_ru": "Поражение 1", "id": "loss-1"},
-  {"category": "Игры и интерфейс", "name_ru": "Поражение 2", "id": "loss-2"},
-  {"category": "Игры и интерфейс", "name_ru": "Сигнал / Пиканье 1", "id": "ping-1"},
-  {"category": "Игры и интерфейс", "name_ru": "Сигнал / Пиканье 2", "id": "ping-2"},
-  {"category": "Игры и интерфейс", "name_ru": "Получение бонуса", "id": "powerup-1"},
-  {"category": "Игры и интерфейс", "name_ru": "8-bit Монетка 1", "id": "8bit-coin-1"},
-  {"category": "Игры и интерфейс", "name_ru": "8-bit Монетка 2", "id": "8bit-coin-2"},
-  {"category": "Игры и интерфейс", "name_ru": "8-bit Прыжок 1", "id": "8bit-jump-1"},
-  {"category": "Игры и интерфейс", "name_ru": "8-bit Прыжок 2", "id": "8bit-jump-2"},
-  {"category": "Игры и интерфейс", "name_ru": "8-bit Выстрел", "id": "8bit-shot-1"},
-  {"category": "Игры и интерфейс", "name_ru": "Взрыв 1", "id": "explosion-1"},
-  {"category": "Игры и интерфейс", "name_ru": "Взрыв 2", "id": "explosion-2"},
-  {"category": "Люди", "name_ru": "Аплодисменты 1", "id": "human-cheering-1"},
-  {"category": "Люди", "name_ru": "Аплодисменты 2", "id": "human-cheering-2"},
-  {"category": "Люди", "name_ru": "Смех 1", "id": "human-laugh-1"},
-  {"category": "Люди", "name_ru": "Смех 2", "id": "human-laugh-2"},
-  {"category": "Люди", "name_ru": "Смех 3", "id": "human-laugh-3"},
-  {"category": "Люди", "name_ru": "Кашель 1", "id": "human-cough-1"},
-  {"category": "Люди", "name_ru": "Кашель 2", "id": "human-cough-2"},
-  {"category": "Люди", "name_ru": "Шаги по полу", "id": "human-walking-dead-1"},
-  {"category": "Люди", "name_ru": "Чихание", "id": "human-sneeze-1"},
-  {"category": "Люди", "name_ru": "Зевание", "id": "human-yawn-1"},
-  {"category": "Люди", "name_ru": "Храп", "id": "human-snore-1"},
-  {"category": "Люди", "name_ru": "Шепот", "id": "human-whisper-1"},
-  {"category": "Люди", "name_ru": "Крик", "id": "human-scream-1"},
-  {"category": "Природа и погода", "name_ru": "Шум ветра 1", "id": "wind-1"},
-  {"category": "Природа и погода", "name_ru": "Шум ветра 2", "id": "wind-2"},
-  {"category": "Природа и погода", "name_ru": "Дождь 1", "id": "rain-1"},
-  {"category": "Природа и погода", "name_ru": "Дождь 2", "id": "rain-2"},
-  {"category": "Природа и погода", "name_ru": "Раскат грома 1", "id": "thunder-1"},
-  {"category": "Природа и погода", "name_ru": "Раскат грома 2", "id": "thunder-2"},
-  {"category": "Природа и погода", "name_ru": "Треск костра 1", "id": "fire-1"},
-  {"category": "Природа и погода", "name_ru": "Треск костра 2", "id": "fire-2"},
-  {"category": "Природа и погода", "name_ru": "Морской прибой 1", "id": "sea-1"},
-  {"category": "Природа и погода", "name_ru": "Морской прибой 2", "id": "sea-2"},
-  {"category": "Природа и погода", "name_ru": "Журчание ручья 1", "id": "stream-1"},
-  {"category": "Природа и погода", "name_ru": "Журчание ручья 2", "id": "stream-2"},
-  {"category": "Животные", "name_ru": "Мяуканье кошки 1", "id": "cat-meow-1"},
-  {"category": "Животные", "name_ru": "Мяуканье кошки 2", "id": "cat-meow-2"},
-  {"category": "Животные", "name_ru": "Мурлыканье кота 1", "id": "cat-purr-1"},
-  {"category": "Животные", "name_ru": "Мурлыканье кота 2", "id": "cat-purr-2"},
-  {"category": "Животные", "name_ru": "Лай собаки 1", "id": "dog-bark-1"},
-  {"category": "Животные", "name_ru": "Лай собаки 2", "id": "dog-bark-2"},
-  {"category": "Животные", "name_ru": "Рычание собаки", "id": "dog-growl-1"},
-  {"category": "Животные", "name_ru": "Кукареканье петуха 1", "id": "rooster-1"},
-  {"category": "Животные", "name_ru": "Кукареканье петуха 2", "id": "rooster-2"},
-  {"category": "Животные", "name_ru": "Уханье совы 1", "id": "owl-1"},
-  {"category": "Животные", "name_ru": "Уханье совы 2", "id": "owl-2"},
-  {"category": "Животные", "name_ru": "Рык льва 1", "id": "lion-1"},
-  {"category": "Животные", "name_ru": "Рык льва 2", "id": "lion-2"},
-  {"category": "Животные", "name_ru": "Топот копыт лошади 1", "id": "horse-gallop-1"},
-  {"category": "Животные", "name_ru": "Топот копыт лошади 2", "id": "horse-gallop-2"},
-  {"category": "Животные", "name_ru": "Ржание лошади", "id": "horse-neigh-1"},
-  {"category": "Животные", "name_ru": "Пение птиц 1", "id": "birds-1"},
-  {"category": "Животные", "name_ru": "Пение птиц 2", "id": "birds-2"},
-  {"category": "Предметы и быт", "name_ru": "Открывание двери 1", "id": "door-open-1"},
-  {"category": "Предметы и быт", "name_ru": "Открывание двери 2", "id": "door-open-2"},
-  {"category": "Предметы и быт", "name_ru": "Закрывание двери 1", "id": "door-close-1"},
-  {"category": "Предметы и быт", "name_ru": "Закрывание двери 2", "id": "door-close-2"},
-  {"category": "Предметы и быт", "name_ru": "Звонок колокольчика 1", "id": "bell-1"},
-  {"category": "Предметы и быт", "name_ru": "Звонок колокольчика 2", "id": "bell-2"},
-  {"category": "Предметы и быт", "name_ru": "Звон разбитого стекла 1", "id": "glass-break-1"},
-  {"category": "Предметы и быт", "name_ru": "Звон разбитого стекла 2", "id": "glass-break-2"},
-  {"category": "Предметы и быт", "name_ru": "Тиканье часов 1", "id": "clock-1"},
-  {"category": "Предметы и быт", "name_ru": "Тиканье часов 2", "id": "clock-2"},
-  {"category": "Предметы и быт", "name_ru": "Кукушка в часах", "id": "cuckoo-clock-1"},
-  {"category": "Предметы и быт", "name_ru": "Хлопок дверцы машины 1", "id": "car-door-1"},
-  {"category": "Предметы и быт", "name_ru": "Хлопок дверцы машины 2", "id": "car-door-2"},
-  {"category": "Предметы и быт", "name_ru": "Аплодисменты бытовые 1", "id": "applause-1"},
-  {"category": "Предметы и быт", "name_ru": "Аплодисменты бытовые 2", "id": "applause-2"},
-  {"category": "Предметы и быт", "name_ru": "Свисток чайника", "id": "kettle-whistle-1"},
-  {"category": "Предметы и быт", "name_ru": "Наливание воды", "id": "water-pour-1"},
-  {"category": "Транспорт и техника", "name_ru": "Автомобильный сигнал 1", "id": "car-horn-1"},
-  {"category": "Транспорт и техника", "name_ru": "Автомобильный сигнал 2", "id": "car-horn-2"},
-  {"category": "Транспорт и техника", "name_ru": "Сирена 1", "id": "siren-1"},
-  {"category": "Транспорт и техника", "name_ru": "Сирена 2", "id": "siren-2"},
-  {"category": "Транспорт и техника", "name_ru": "Гудок поезда 1", "id": "train-1"},
-  {"category": "Транспорт и техника", "name_ru": "Гудок поезда 2", "id": "train-2"},
-  {"category": "Транспорт и техника", "name_ru": "Гул самолета 1", "id": "airplane-1"},
-  {"category": "Транспорт и техника", "name_ru": "Гул самолета 2", "id": "airplane-2"},
-  {"category": "Транспорт и техника", "name_ru": "Шум вертолета", "id": "helicopter-1"},
-  {"category": "Транспорт и техника", "name_ru": "Взлет ракеты", "id": "rocket-launch-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Барабанная дробь 1", "id": "drum-roll-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Барабанная дробь 2", "id": "drum-roll-2"},
-  {"category": "Музыка и инструменты", "name_ru": "Торжественные фанфары 1", "id": "fanfare-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Торжественные фанфары 2", "id": "fanfare-2"},
-  {"category": "Музыка и инструменты", "name_ru": "Струны арфы 1", "id": "harp-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Струны арфы 2", "id": "harp-2"},
-  {"category": "Музыка и инструменты", "name_ru": "Звук гонга 1", "id": "gong-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Звук гонга 2", "id": "gong-2"},
-  {"category": "Музыка и инструменты", "name_ru": "Аккорд пианино", "id": "piano-chord-1"},
-  {"category": "Музыка и инструменты", "name_ru": "Бой барабана", "id": "drum-hit-1"}
+  {
+    "id": "bell-1",
+    "name_ru": "Звонок колокольчика 1",
+    "category": "Предметы и быт"
+  },
+  {
+    "id": "bell-2",
+    "name_ru": "Звонок колокольчика 2",
+    "category": "Предметы и быт"
+  },
+  {
+    "id": "cuckoo-clock-1",
+    "name_ru": "Кукушка в часах",
+    "category": "Предметы и быт"
+  },
+  {
+    "id": "explosion-1",
+    "name_ru": "Взрыв 1",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "fire-1",
+    "name_ru": "Треск костра 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "fire-2",
+    "name_ru": "Треск костра 2",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "gong-1",
+    "name_ru": "Звук гонга 1",
+    "category": "Музыка и инструменты"
+  },
+  {
+    "id": "gong-2",
+    "name_ru": "Звук гонга 2",
+    "category": "Музыка и инструменты"
+  },
+  {
+    "id": "harp-1",
+    "name_ru": "Струны арфы 1",
+    "category": "Музыка и инструменты"
+  },
+  {
+    "id": "lion-1",
+    "name_ru": "Рык льва 1",
+    "category": "Животные"
+  },
+  {
+    "id": "lion-2",
+    "name_ru": "Рык льва 2",
+    "category": "Животные"
+  },
+  {
+    "id": "loss-1",
+    "name_ru": "Поражение 1",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "loss-2",
+    "name_ru": "Поражение 2",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "owl-1",
+    "name_ru": "Уханье совы 1",
+    "category": "Животные"
+  },
+  {
+    "id": "owl-2",
+    "name_ru": "Уханье совы 2",
+    "category": "Животные"
+  },
+  {
+    "id": "ping-1",
+    "name_ru": "Сигнал / Пиканье 1",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "powerup-1",
+    "name_ru": "Получение бонуса",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "rain-1",
+    "name_ru": "Дождь 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "rain-2",
+    "name_ru": "Дождь 2",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "rooster-1",
+    "name_ru": "Кукареканье петуха 1",
+    "category": "Животные"
+  },
+  {
+    "id": "sea-1",
+    "name_ru": "Морской прибой 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "sea-2",
+    "name_ru": "Морской прибой 2",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "siren-1",
+    "name_ru": "Сирена 1",
+    "category": "Транспорт и техника"
+  },
+  {
+    "id": "siren-2",
+    "name_ru": "Сирена 2",
+    "category": "Транспорт и техника"
+  },
+  {
+    "id": "stream-1",
+    "name_ru": "Журчание ручья 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "stream-2",
+    "name_ru": "Журчание ручья 2",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "thunder-1",
+    "name_ru": "Раскат грома 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "thunder-2",
+    "name_ru": "Раскат грома 2",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "win-1",
+    "name_ru": "Победа 1",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "win-2",
+    "name_ru": "Победа 2",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "win-3",
+    "name_ru": "Победа 3",
+    "category": "Игры и интерфейс"
+  },
+  {
+    "id": "wind-1",
+    "name_ru": "Шум ветра 1",
+    "category": "Природа и погода"
+  },
+  {
+    "id": "wind-2",
+    "name_ru": "Шум ветра 2",
+    "category": "Природа и погода"
+  }
 ]

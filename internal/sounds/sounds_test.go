@@ -27,9 +27,12 @@ func TestFindEffectByEnglishSlugSingleMatch(t *testing.T) {
 }
 
 func TestFindEffectAmbiguousReturnsCandidates(t *testing.T) {
-	// explosion-1 and explosion-2 both exist — "explosion" alone must
-	// not silently pick one.
-	id, candidates, ok := FindEffect("explosion")
+	// bell-1 and bell-2 both exist (both confirmed working against a
+	// real device) — "bell" alone must not silently pick one.
+	// (explosion-2 used to be the example here, but it was removed by
+	// cmd/yastation-soundcheck-apply after a real device confirmed only
+	// explosion-1 actually exists.)
+	id, candidates, ok := FindEffect("bell")
 	if ok {
 		t.Fatalf("expected ambiguous match, got id=%q", id)
 	}
