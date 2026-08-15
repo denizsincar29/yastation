@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -151,6 +152,47 @@ func station(args []string) (string, []string) {
 		}
 	}
 	return "", args
+}
+
+// formatSoundList renders the sound_play catalog (the one /sound plays
+// from) as a plain-text, category-grouped list — no markup, so it reads
+// fine through a screen reader. filter (already lowercased) narrows it
+// to ids/names containing that substring; empty filter lists everything.
+func formatSoundList(filter string) string {
+	byCategory := map[string][]sounds.Effect{}
+	var order []string
+	for _, e := range sounds.Effects() {
+		if filter != "" &&
+			!strings.Contains(strings.ToLower(e.ID), filter) &&
+			!strings.Contains(strings.ToLower(e.NameRU), filter) &&
+			!strings.Contains(strings.ToLower(e.Category), filter) {
+			continue
+		}
+		if _, seen := byCategory[e.Category]; !seen {
+			order = append(order, e.Category)
+		}
+		byCategory[e.Category] = append(byCategory[e.Category], e)
+	}
+	if len(order) == 0 {
+		if filter == "" {
+			return "звуков в каталоге нет"
+		}
+		return fmt.Sprintf("по запросу %q ничего не найдено", filter)
+	}
+	sort.Strings(order)
+	var b strings.Builder
+	total := 0
+	for _, cat := range order {
+		fmt.Fprintf(&b, "%s:\n", cat)
+		list := byCategory[cat]
+		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+		for _, e := range list {
+			fmt.Fprintf(&b, "  %s (%s)\n", e.ID, e.NameRU)
+			total++
+		}
+	}
+	fmt.Fprintf(&b, "Всего: %d", total)
+	return b.String()
 }
 
 // notifyVolume extracts an optional "volume=X" argument for /notify,
@@ -369,6 +411,13 @@ func (a *App) registerCommands() {
 			}
 			return fmt.Sprintf("[звук] %s (запрос: %s)", id, query), nil
 		}, "sound")
+
+	d.HandleCat("Экспериментально",
+		"Список всех доступных звуков (для /sound), по категориям; можно сузить подстрокой RU/EN: /sounds, /sounds смех",
+		func(ctx context.Context, args []string) (string, error) {
+			filter := strings.ToLower(strings.TrimSpace(dispatch.Rest(args)))
+			return formatSoundList(filter), nil
+		}, "sounds", "soundlist")
 
 	d.HandleCat("Экспериментально",
 		"Жёсткий стоп всего (не то же самое, что /stop): /stopall [станция]",

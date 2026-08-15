@@ -328,6 +328,40 @@ func TestSoundAmbiguousQueryErrors(t *testing.T) {
 	}
 }
 
+func TestSoundsListsCatalog(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	out := mustExec(t, a, "/sounds")
+	if !strings.Contains(out, "bell-1") || !strings.Contains(out, "Всего:") {
+		t.Fatalf("unfiltered /sounds output missing expected content: %q", out)
+	}
+	// alias
+	out2 := mustExec(t, a, "/soundlist")
+	if out2 != out {
+		t.Fatalf("/soundlist should match /sounds: %q vs %q", out2, out)
+	}
+}
+
+func TestSoundsFilterMatchesIDNameOrCategory(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	// substring of an id
+	out := mustExec(t, a, "/sounds cough")
+	if !strings.Contains(out, "cough-1") || strings.Contains(out, "bell-1") {
+		t.Fatalf("id filter leaked or missed entries: %q", out)
+	}
+	// substring of a Russian category name
+	out = mustExec(t, a, "/sounds Люди")
+	if !strings.Contains(out, "cough-1") || !strings.Contains(out, "laugh-1") || strings.Contains(out, "bell-1") {
+		t.Fatalf("category filter wrong: %q", out)
+	}
+	// no match
+	out = mustExec(t, a, "/sounds zzzznonexistent")
+	if strings.Contains(out, "Всего:") {
+		t.Fatalf("expected no-match message, got: %q", out)
+	}
+}
+
 func TestStopAll(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()
