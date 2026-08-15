@@ -16,9 +16,11 @@
 //	go run ./cmd/yastation-soundcheck -delay 4s           # pause between sounds (let them finish)
 //	go run ./cmd/yastation-soundcheck -resume             # skip ids already in -out from a previous run
 //	go run ./cmd/yastation-soundcheck -filter explosion   # only check ids/names containing this substring
-//	go run ./cmd/yastation-soundcheck -ids-file candidates_human.json   # test id hypotheses not yet in the catalog
-//	                                                       # (see cmd/yastation-soundcheck/candidates_human.json for
-//	                                                       # an example: "Люди" ids without the "human-" prefix)
+//	go run ./cmd/yastation-soundcheck -ids-file candidates_stripped.json   # test id hypotheses not yet in the catalog
+//	                                                       # (see cmd/yastation-soundcheck/candidates_stripped.json:
+//	                                                       # for every failed original id like "human-cough-1", every
+//	                                                       # progressive hyphen-strip is a candidate — "cough-1",
+//	                                                       # and for 3+ segment ids every intermediate strip too)
 //
 // Results are written incrementally to -out (default sound_check_results.json)
 // as {"id":..., "name_ru":..., "ok":bool, "error":"..."} lines (JSON Lines,
