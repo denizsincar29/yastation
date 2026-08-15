@@ -69,7 +69,7 @@ func (f *fakeStation) RawCapability(station, capType, instance string, value any
 func (f *fakeStation) SayWhisper(station, text string) error {
 	return f.record(fmt.Sprintf("whisper:%s:%s", station, text))
 }
-func (f *fakeStation) PlaySound(station, soundID string) error {
+func (f *fakeStation) PlaySound(station, soundID, soundName string) error {
 	return f.record(fmt.Sprintf("sound:%s:%s", station, soundID))
 }
 func (f *fakeStation) StopEverything(station string) error {

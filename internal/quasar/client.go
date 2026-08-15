@@ -464,8 +464,11 @@ func (c *Client) PlayMusic(station string) error {
 // voice ("включи звук дождя") and then read the id back via
 // Capabilities()'s sound_play state, which reports exactly what got
 // triggered.
-func (c *Client) PlaySound(station, soundID string) error {
-	return c.RawCapability(station, "devices.capabilities.quasar", "sound_play", map[string]any{"sound": soundID})
+func (c *Client) PlaySound(station, soundID, soundName string) error {
+	return c.RawCapability(station, "devices.capabilities.quasar", "sound_play", map[string]any{
+		"sound":      soundID,
+		"sound_name": soundName,
+	})
 }
 
 // StopEverything is a harder stop than Stop ("останови" — just pauses
