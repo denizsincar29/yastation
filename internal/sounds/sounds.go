@@ -149,6 +149,21 @@ func FindSpeakerAudio(query string) (fullID string, candidates []SpeakerAudio, o
 		func(a SpeakerAudio) string { return a.NameRU })
 }
 
+// EffectNameByID returns the Russian display name for a sound_play id
+// (e.g. "explosion-2" -> "Взрыв 2"), or "" if the id isn't in the
+// catalog. Needed because Yandex's sound_play capability now validates
+// that the scenario's value carries *both* "sound" and "sound_name" —
+// sending "sound" alone (which used to be accepted) now comes back as
+// BAD_REQUEST.
+func EffectNameByID(id string) string {
+	for _, e := range effects {
+		if e.ID == id {
+			return e.NameRU
+		}
+	}
+	return ""
+}
+
 // FormatCandidates renders an ambiguous/failed lookup's candidates as a
 // short human-readable list, for error messages.
 func FormatCandidates[T Effect | SpeakerAudio](query string, candidates []T) string {

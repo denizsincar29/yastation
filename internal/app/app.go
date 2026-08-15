@@ -52,7 +52,7 @@ type StationAPI interface {
 	// dump (see PROTOCOL_NOTES.md) rather than guessed — see quasar.Client
 	// for exactly what's confirmed vs inferred by symmetry.
 	SayWhisper(station, text string) error
-	PlaySound(station, soundID string) error
+	PlaySound(station, soundID, soundName string) error
 	StopEverything(station string) error
 	LightScene(station, sceneID string) error
 	Weather(station string) error
@@ -364,7 +364,7 @@ func (a *App) registerCommands() {
 			if !ok {
 				return "", fmt.Errorf("%s", sounds.FormatCandidates(query, candidates))
 			}
-			if err := a.Client.PlaySound(station, id); err != nil {
+			if err := a.Client.PlaySound(station, id, sounds.EffectNameByID(id)); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("[звук] %s (запрос: %s)", id, query), nil

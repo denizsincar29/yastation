@@ -55,7 +55,7 @@ func (f *fakeStation) RawCapability(station, capType, instance string, value any
 	return nil
 }
 func (f *fakeStation) SayWhisper(station, text string) error    { return nil }
-func (f *fakeStation) PlaySound(station, soundID string) error  { return nil }
+func (f *fakeStation) PlaySound(station, soundID, soundName string) error { return nil }
 func (f *fakeStation) StopEverything(station string) error      { return nil }
 func (f *fakeStation) LightScene(station, sceneID string) error { return nil }
 func (f *fakeStation) Weather(station string) error             { return nil }
