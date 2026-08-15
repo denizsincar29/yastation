@@ -22,8 +22,14 @@
 // The list has since been re-verified end-to-end against a real device
 // with cmd/yastation-soundcheck: 33 of the original ~95 guessed ids
 // actually work, the rest returned BAD_REQUEST and were removed by
-// cmd/yastation-soundcheck-apply. Every id currently in sound_play.json
-// is confirmed, not guessed.
+// cmd/yastation-soundcheck-apply. A second pass (cmd/yastation-soundcheck
+// -ids-file candidates_stripped.json) tried progressive hyphen-strips of
+// every id that failed — e.g. "human-cough-1" without its leading
+// segment, "cough-1" — and found 11 more real ids hiding under shorter
+// names than their category-prefixed originals (cough-1/2, door-1/2,
+// horn-1/2, laugh-1/2/3, sneeze-1, walking-dead-1). Every id currently
+// in sound_play.json (44 total) is confirmed against real hardware, not
+// guessed.
 package sounds
 
 import (
