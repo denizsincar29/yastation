@@ -16,6 +16,9 @@
 //	go run ./cmd/yastation-soundcheck -delay 4s           # pause between sounds (let them finish)
 //	go run ./cmd/yastation-soundcheck -resume             # skip ids already in -out from a previous run
 //	go run ./cmd/yastation-soundcheck -filter explosion   # only check ids/names containing this substring
+//	go run ./cmd/yastation-soundcheck -ids-file candidates_human.json   # test id hypotheses not yet in the catalog
+//	                                                       # (see cmd/yastation-soundcheck/candidates_human.json for
+//	                                                       # an example: "Люди" ids without the "human-" prefix)
 //
 // Results are written incrementally to -out (default sound_check_results.json)
 // as {"id":..., "name_ru":..., "ok":bool, "error":"..."} lines (JSON Lines,
@@ -51,11 +54,13 @@ func main() {
 	var outPath string
 	var resume bool
 	var filter string
+	var idsFile string
 	flag.StringVar(&station, "station", "", "имя/id колонки (по умолчанию — колонка по умолчанию)")
 	flag.DurationVar(&delay, "delay", 3*time.Second, "пауза между звуками, чтобы каждый успел доиграть")
 	flag.StringVar(&outPath, "out", "sound_check_results.jsonl", "куда писать результаты (JSON Lines)")
 	flag.BoolVar(&resume, "resume", false, "пропустить id, уже отмеченные в -out от прошлого запуска")
 	flag.StringVar(&filter, "filter", "", "проверять только id/имена, содержащие эту подстроку")
+	flag.StringVar(&idsFile, "ids-file", "", "проверить id из этого JSON-файла ([{\"id\":..,\"name_ru\":..}, ...]) вместо каталога sound_play.json — для проверки id-гипотез, которых ещё нет в каталоге")
 	flag.Parse()
 
 	already := map[string]bool{}
@@ -64,6 +69,14 @@ func main() {
 	}
 
 	effects := sounds.Effects()
+	if idsFile != "" {
+		custom, err := loadCandidates(idsFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "не могу прочитать", idsFile, ":", err)
+			os.Exit(1)
+		}
+		effects = custom
+	}
 	var todo []sounds.Effect
 	for _, e := range effects {
 		if filter != "" && !strings.Contains(strings.ToLower(e.ID), strings.ToLower(filter)) &&
@@ -131,6 +144,21 @@ func main() {
 	if failCount > 0 {
 		fmt.Println("Дальше: go run ./cmd/yastation-soundcheck-apply -in", outPath, "чтобы пересобрать sound_play.json только из ok:true")
 	}
+}
+
+// loadCandidates reads an ad-hoc list of id hypotheses to check, in the
+// same shape as sound_play.json, for testing ids that aren't (yet) in
+// the catalog at all.
+func loadCandidates(path string) ([]sounds.Effect, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var effects []sounds.Effect
+	if err := json.Unmarshal(data, &effects); err != nil {
+		return nil, err
+	}
+	return effects, nil
 }
 
 // loadDone reads a previous JSONL run and returns the set of ids it
