@@ -276,18 +276,17 @@ func replPlain(ctx context.Context, a *app.App) {
 //   - sound_play ids as the last argument to /sound, /sounds or /soundlist
 //     (their aliases included) — e.g. "/sound coug<TAB>" -> "/sound cough-1"/"cough-2"
 //   - inside an unclosed "[query" anywhere on the line — the speaker_audio
-//     catalog (id or RU name), the one [query] embeds via /say or bare
-//     text — regardless of what command (if any) the line starts with,
-//     since [sound] markup works the same inside /say and inside plain
-//     text with no leading "/" at all. Prefix-only, same as everything
-//     else here (see the package doc comment above for why): typing the
-//     literal start of the id or the RU name completes it, but a short
-//     colloquial word that isn't a prefix of either (e.g. "bell" for
-//     "alice-sounds-things-bell-1") can't — readline only ever inserts
-//     at the cursor, it can't rewrite what's already typed. That's fine
-//     in practice: /say [bell] already resolves such a query at runtime
-//     via sounds.FindSpeakerAudio's own fuzzy match, or errors out
-//     listing the real candidates if it's ambiguous — same as /sound.
+//     catalog: full id ("alice-sounds-things-bell-1"), RU name
+//     ("Колокол 1"), short id ("bell-1"), or short RU keyword
+//     ("колокол-1") — regardless of what command (if any) the line
+//     starts with, since [sound] markup works the same inside /say and
+//     inside plain text with no leading "/" at all. Still prefix-only
+//     (see the package doc comment above for why readline can't do
+//     anything else): "bell" alone won't complete, since it's not a
+//     literal prefix of any of those four forms — but that's fine,
+//     since /say [bell] already resolves such a query at runtime via
+//     sounds.FindSpeakerAudio's own fuzzy substring match (or errors out
+//     listing the real candidates if it's ambiguous, same as /sound).
 //   - a real speaker name right after "station=", for any command —
 //     e.g. "/volume station=Кух<TAB>" -> the matching device name(s)
 //
@@ -331,7 +330,7 @@ func newCompleter(a *app.App, client *quasar.Client) *completer {
 
 	var speakerAudio []string
 	for _, s := range sounds.SpeakerAudios() {
-		speakerAudio = append(speakerAudio, s.FullID, s.NameRU)
+		speakerAudio = append(speakerAudio, s.FullID, s.NameRU, s.ShortID, s.ShortRU)
 	}
 	sort.Strings(speakerAudio)
 
