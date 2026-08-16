@@ -266,8 +266,13 @@ func replPlain(ctx context.Context, a *app.App) {
 
 // completer implements readline.AutoCompleter. Tab completion covers:
 //   - the command itself, at the start of the line ("/sou<TAB>" -> "/sound", "/sounds", "/soundlist", "/soundcategories", "/sndcat")
-//   - sound ids as the last argument to /sound, /sounds or /soundlist
+//   - sound_play ids as the last argument to /sound, /sounds or /soundlist
 //     (their aliases included) — e.g. "/sound coug<TAB>" -> "/sound cough-1"/"cough-2"
+//   - inside an unclosed "[query" anywhere on the line — the speaker_audio
+//     catalog (id or RU name), the one [query] embeds via /say or bare
+//     text — regardless of what command (if any) the line starts with,
+//     since [sound] markup works the same inside /say and inside plain
+//     text with no leading "/" at all
 //   - a real speaker name right after "station=", for any command —
 //     e.g. "/volume station=Кух<TAB>" -> the matching device name(s)
 //
@@ -275,9 +280,10 @@ func replPlain(ctx context.Context, a *app.App) {
 // arguments (song names, timer durations, ...) — those aren't from a
 // closed set, so there's nothing useful to offer.
 type completer struct {
-	commands []string // every registered name/alias, with the leading "/"
-	soundIDs []string
-	stations []string
+	commands     []string // every registered name/alias, with the leading "/"
+	soundIDs     []string
+	speakerAudio []string // speaker_audio catalog: both full ids and RU names, flat
+	stations     []string
 }
 
 // soundArgCommands are the command names (without the leading "/",
@@ -308,13 +314,19 @@ func newCompleter(a *app.App, client *quasar.Client) *completer {
 	}
 	sort.Strings(soundIDs)
 
+	var speakerAudio []string
+	for _, s := range sounds.SpeakerAudios() {
+		speakerAudio = append(speakerAudio, s.FullID, s.NameRU)
+	}
+	sort.Strings(speakerAudio)
+
 	var stations []string
 	for _, d := range client.Speakers {
 		stations = append(stations, d.Name)
 	}
 	sort.Strings(stations)
 
-	return &completer{commands: commands, soundIDs: soundIDs, stations: stations}
+	return &completer{commands: commands, soundIDs: soundIDs, speakerAudio: speakerAudio, stations: stations}
 }
 
 // Do implements readline.AutoCompleter. line is the whole buffer, pos is
@@ -324,6 +336,15 @@ func newCompleter(a *app.App, client *quasar.Client) *completer {
 // of the already-typed word they replace/extend.
 func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 	text := string(line[:pos])
+
+	// Inside an unclosed "[query" — complete against the [sound] markup
+	// catalog no matter what command (if any) started the line, since
+	// "[" isn't a word boundary for the usual space-splitting below and
+	// this markup works identically inside /say and bare text.
+	if openIdx, ok := lastUnclosedBracket(text); ok {
+		return completeAgainst(c.speakerAudio, text[openIdx+1:])
+	}
+
 	wordStart := strings.LastIndexAny(text, " \t")
 	word := text[wordStart+1:]
 	typedBefore := strings.Fields(text[:wordStart+1])
@@ -344,6 +365,22 @@ func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 		}
 	}
 	return nil, 0
+}
+
+// lastUnclosedBracket reports the index of the last "[" in text that
+// has no matching "]" after it — i.e. the cursor sits inside an open
+// "[query" marker (not yet a complete "[query]"). ok is false if there
+// isn't one (no "[" at all, or the last one is already closed before
+// the cursor).
+func lastUnclosedBracket(text string) (idx int, ok bool) {
+	openIdx := strings.LastIndexByte(text, '[')
+	if openIdx == -1 {
+		return 0, false
+	}
+	if strings.IndexByte(text[openIdx:], ']') != -1 {
+		return 0, false
+	}
+	return openIdx, true
 }
 
 // completeAgainst returns every option in options that starts with word
