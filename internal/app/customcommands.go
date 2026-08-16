@@ -31,12 +31,57 @@ import (
 //
 // Template placeholders are "$paramName", substituted from the bound
 // params (surrounding whitespace left over from an unset optional param
-// is trimmed). Kind is "command" (default — sent as if spoken to Alice,
-// like /cmd) or "say" (sent as flat TTS, like /say). Category groups the
+// is trimmed — but only at the very edges of the whole rendered string,
+// see the conditional block syntax below for anything fancier). Kind is
+// "command" (default — sent as if spoken to Alice, like /cmd) or "say"
+// (sent as flat TTS, like /say). Category groups the
 // command in /help; defaults to "Свои команды" if omitted — this is what
 // distinguishes a user's own commands.json from yastation's own built-in
 // config.json (see config.json.default), which sets an explicit category
 // per command ("Плеер", "Напоминания", ...).
+//
+// Conditional blocks: "{{...}}" contains one or more ";"-separated
+// branches, each "condition?text", evaluated left to right — the first
+// branch whose condition holds wins and its text (with its own "$..."
+// placeholders substituted normally) is what gets rendered; if nothing
+// matches (and there's no "$?" default branch) the whole block renders
+// as "". Unlike a bare "$param" substitution — which always leaves an
+// empty string plus whatever surrounding literal text was already
+// there — this lets an optional/varying param bring its own bit of
+// surrounding text along (a preposition, a case ending, an entirely
+// different phrase...). Recognized branch forms:
+//
+//	$name?text         truthy — text if the param is bound and non-empty
+//	$name==value?text  equality — text if the param's value equals value
+//	                    exactly ("=value?text", single "=", also works —
+//	                    typo-tolerant, means the same thing)
+//	$?text              default/else — always matches, put it last
+//
+// Simple optional-with-preposition example:
+//
+//	"params": ["city?"],
+//	"template": "какая погода {{$city?в $city}}"
+//
+//	/weather        -> "какая погода"          (city unset: block -> "", trailing space trimmed)
+//	/weather Москва -> "какая погода в Москва"  (block -> "в Москва")
+//
+// Multi-branch (switch-like) example:
+//
+//	"params": ["source?"],
+//	"template": "спроси навык мастер скилл прочитать сообщения {{$source==ls?в первых личных;$source==channel?на моём канале;$?первые 5 личных}}"
+//
+//	/messages         -> "...сообщения первые 5 личных"    (source unset, no branch matches -> default)
+//	/messages ls      -> "...сообщения в первых личных"
+//	/messages channel -> "...сообщения на моём канале"
+//
+// Two caveats from how small this parser is: a branch's own text can't
+// contain a literal "?" (the first one found ends the condition, always)
+// or ";" (that's the branch separator) — and, same as the single-block
+// case, this only helps at the very edges of the *template*: leading/
+// trailing whitespace gets cleaned up by the final trim, but a block
+// sitting in the middle of literal text on both sides can still leave a
+// doubled space if it resolves to "" — so prefer putting it at the end
+// when you can.
 type CustomCommandDef struct {
 	Name     string   `json:"name"`
 	Aliases  []string `json:"aliases,omitempty"`
@@ -179,12 +224,26 @@ func bindCustomParams(params, args []string) (map[string]string, error) {
 	return values, nil
 }
 
-var customPlaceholderRe = regexp.MustCompile(`\$(\w+)`)
+var (
+	customPlaceholderRe = regexp.MustCompile(`\$(\w+)`)
+	customBlockRe       = regexp.MustCompile(`\{\{([^{}]*)\}\}`)
+)
 
 // renderCustomTemplate replaces every "$paramName" in tmpl with its bound
 // value. Unknown placeholders (typo'd param names) are left as-is rather
 // than silently dropped, so a bad config is easy to notice in the output.
+//
+// "{{...}}" blocks are resolved first (see CustomCommandDef's doc
+// comment for the full branch syntax) — each becomes whichever branch's
+// text won, itself still containing "$..." placeholders at this point.
+// The regular "$paramName" pass below then substitutes whatever
+// placeholders remain, whether they came from inside a resolved block or
+// were already bare in the template.
 func renderCustomTemplate(tmpl string, values map[string]string) string {
+	tmpl = customBlockRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		inner := customBlockRe.FindStringSubmatch(m)[1]
+		return renderConditionalBlock(inner, values)
+	})
 	return customPlaceholderRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		name := m[1:]
 		if v, ok := values[name]; ok {
@@ -192,4 +251,75 @@ func renderCustomTemplate(tmpl string, values map[string]string) string {
 		}
 		return m
 	})
+}
+
+// renderConditionalBlock evaluates one "{{...}}" block's content: one or
+// more ";"-separated branches, each "condition?text", tried left to
+// right — the first branch whose condition holds wins, and its text is
+// returned as-is (placeholder substitution happens afterward, in the
+// caller). No match (and no "$?" default branch present) renders "".
+//
+// A malformed branch (missing "?", or not starting with "$") is skipped
+// rather than treated as a match or aborting the whole block — same
+// leave-it-visible-ish philosophy as an unknown "$param": easy to spot
+// in the output ("что-то не сработало"), doesn't crash the command.
+func renderConditionalBlock(content string, values map[string]string) string {
+	for _, branch := range strings.Split(content, ";") {
+		cond, text, ok := parseBranch(branch)
+		if ok && cond.matches(values) {
+			return text
+		}
+	}
+	return ""
+}
+
+// branchCondition is one parsed "condition" half of a "condition?text"
+// branch. name == "" marks the default/else branch ("$?text"), which
+// always matches.
+type branchCondition struct {
+	name       string
+	wantEquals bool   // true for "$name==value" / "$name=value", false for a bare "$name" truthiness check
+	value      string // only meaningful when wantEquals
+}
+
+func (c branchCondition) matches(values map[string]string) bool {
+	if c.name == "" {
+		return true // "$?text" — the else/default branch
+	}
+	v, ok := values[c.name]
+	if !ok {
+		return false // typo'd/unknown param name in a condition — never matches, never crashes
+	}
+	if c.wantEquals {
+		return v == c.value
+	}
+	return v != ""
+}
+
+// parseBranch splits one ";"-separated piece of a "{{...}}" block into
+// its condition and text halves, on the branch's own "?" (the first one
+// — so branch text itself can't contain a literal "?", a known
+// limitation of this small syntax). Recognized condition forms:
+//
+//	$name?text        truthy check — text if the param is bound and non-empty
+//	$name==value?text  equality check ("=value?text" also accepted, in
+//	                   case of a typo — both mean the same thing)
+//	$?text             the default/else branch, always matches
+func parseBranch(branch string) (cond branchCondition, text string, ok bool) {
+	idx := strings.IndexByte(branch, '?')
+	if idx < 0 || !strings.HasPrefix(branch, "$") {
+		return branchCondition{}, "", false
+	}
+	condPart := strings.TrimPrefix(branch[:idx], "$")
+	text = branch[idx+1:]
+	if condPart == "" {
+		return branchCondition{}, text, true // "$?text"
+	}
+	if i := strings.Index(condPart, "=="); i >= 0 {
+		return branchCondition{name: condPart[:i], wantEquals: true, value: condPart[i+2:]}, text, true
+	}
+	if i := strings.IndexByte(condPart, '='); i >= 0 {
+		return branchCondition{name: condPart[:i], wantEquals: true, value: condPart[i+1:]}, text, true
+	}
+	return branchCondition{name: condPart}, text, true
 }
