@@ -24,7 +24,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -195,8 +194,9 @@ func speakerNames(speakers []quasar.Device) string {
 // repl reads commands interactively with readline-style editing: history
 // navigable via the up/down arrows (like Python's input() gets for free
 // from GNU readline), left/right/Home/End/Backspace, Ctrl+C to cancel
-// the current line, Ctrl+D/EOF to quit. History is in-memory for the
-// session only — nothing is written to disk.
+// the current line (or quit if the line is already empty — same as most
+// shells), Ctrl+D/EOF to quit. History is in-memory for the session
+// only — nothing is written to disk.
 //
 // If stdin isn't a real terminal (piped input, some non-standard
 // terminal readline can't drive), it falls back to plain line-by-line
@@ -216,13 +216,20 @@ func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 
 	var lastLine string
 	for {
-		line, err := rl.Readline()
-		if err != nil { // io.EOF (Ctrl+D) or readline.ErrInterrupt (Ctrl+C)
-			if errors.Is(err, readline.ErrInterrupt) {
-				continue
-			}
+		result := rl.Line()
+		if result.CanContinue() {
+			// Ctrl+C with text already typed — shell-like behaviour:
+			// discard that line, stay in the REPL, fresh prompt.
+			continue
+		}
+		if result.CanBreak() {
+			// Ctrl+C on an *empty* line, or Ctrl+D/EOF — actually quit.
+			// (The previous version continued unconditionally on any
+			// interrupt, which is why Ctrl+C looked like it "did
+			// nothing" — there was no way to ever exit with it.)
 			break
 		}
+		line := result.Line
 		if line == "" {
 			continue
 		}
