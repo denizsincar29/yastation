@@ -55,13 +55,13 @@ func (f *fakeStation) Capabilities(station string) ([]any, error) { return nil, 
 func (f *fakeStation) RawCapability(station, capType, instance string, value any) error {
 	return nil
 }
-func (f *fakeStation) SayWhisper(station, text string) error    { return nil }
+func (f *fakeStation) SayWhisper(station, text string) error              { return nil }
 func (f *fakeStation) PlaySound(station, soundID, soundName string) error { return nil }
-func (f *fakeStation) StopEverything(station string) error      { return nil }
-func (f *fakeStation) LightScene(station, sceneID string) error { return nil }
-func (f *fakeStation) Weather(station string) error             { return nil }
-func (f *fakeStation) PlayMusic(station string) error           { return nil }
-func (f *fakeStation) Refresh() error                           { return nil }
+func (f *fakeStation) StopEverything(station string) error                { return nil }
+func (f *fakeStation) LightScene(station, sceneID string) error           { return nil }
+func (f *fakeStation) Weather(station string) error                       { return nil }
+func (f *fakeStation) PlayMusic(station string) error                     { return nil }
+func (f *fakeStation) Refresh() error                                     { return nil }
 
 func TestRunOnceExecutesInOrder(t *testing.T) {
 	f := &fakeStation{}

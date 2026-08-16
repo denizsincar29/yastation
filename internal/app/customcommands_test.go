@@ -76,6 +76,80 @@ func TestRenderCustomTemplateLeavesUnknownPlaceholder(t *testing.T) {
 	}
 }
 
+func TestRenderCustomTemplateSimpleConditionalTruthy(t *testing.T) {
+	tmpl := "какая погода {{$city?в $city}}"
+
+	got := renderCustomTemplate(tmpl, map[string]string{"city": "Москва"})
+	if got != "какая погода в Москва" {
+		t.Fatalf("got %q", got)
+	}
+
+	got = renderCustomTemplate(tmpl, map[string]string{"city": ""})
+	if got != "какая погода " { // caller (registerCustomCommand) is the one that trims the outer edges
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRenderCustomTemplateSwitchWithDefault(t *testing.T) {
+	tmpl := "спроси мастер скилл прочитать сообщения {{$source==ls?в первых личных;$source==channel?на моём канале;$?первые 5 личных}}"
+
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{"ls", "спроси мастер скилл прочитать сообщения в первых личных"},
+		{"channel", "спроси мастер скилл прочитать сообщения на моём канале"},
+		{"", "спроси мастер скилл прочитать сообщения первые 5 личных"},
+		{"anything-else", "спроси мастер скилл прочитать сообщения первые 5 личных"},
+	}
+	for _, c := range cases {
+		got := renderCustomTemplate(tmpl, map[string]string{"source": c.source})
+		if got != c.want {
+			t.Fatalf("source=%q: got %q want %q", c.source, got, c.want)
+		}
+	}
+}
+
+func TestRenderCustomTemplateSingleEqualsAlsoWorksAsEquality(t *testing.T) {
+	tmpl := "{{$mode=loud?ГРОМКО;$?тихо}}"
+	if got := renderCustomTemplate(tmpl, map[string]string{"mode": "loud"}); got != "ГРОМКО" {
+		t.Fatalf("got %q", got)
+	}
+	if got := renderCustomTemplate(tmpl, map[string]string{"mode": "quiet"}); got != "тихо" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRenderCustomTemplateNoDefaultAndNoMatchRendersEmpty(t *testing.T) {
+	tmpl := "x{{$mode==loud?ГРОМКО}}y"
+	got := renderCustomTemplate(tmpl, map[string]string{"mode": "quiet"})
+	if got != "xy" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRenderCustomTemplateConditionalUnknownParamNeverMatches(t *testing.T) {
+	tmpl := "{{$typo?should not appear;$?fallback}}"
+	got := renderCustomTemplate(tmpl, map[string]string{"other": "x"})
+	if got != "fallback" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRenderCustomTemplateConditionalBranchTextItselfHasPlaceholder(t *testing.T) {
+	// the text half of a branch can reference *other* params too, not
+	// just the one being tested in the condition
+	tmpl := "{{$mode==loud?$name, ГРОМКО!;$?тихо, $name}}"
+	got := renderCustomTemplate(tmpl, map[string]string{"mode": "loud", "name": "Дениз"})
+	if got != "Дениз, ГРОМКО!" {
+		t.Fatalf("got %q", got)
+	}
+	got = renderCustomTemplate(tmpl, map[string]string{"mode": "quiet", "name": "Дениз"})
+	if got != "тихо, Дениз" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestValidateCustomCommandDef(t *testing.T) {
 	cases := []struct {
 		name    string
