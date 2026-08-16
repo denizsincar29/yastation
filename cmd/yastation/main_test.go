@@ -201,3 +201,69 @@ func TestNormalizeCFlagCommandsAddsMissingSlash(t *testing.T) {
 		}
 	}
 }
+
+func TestCompleterBracketSoundInsideSay(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+	client := &quasar.Client{}
+	c := newCompleter(a, client)
+
+	// unclosed "[" after /say — must complete from speaker_audio, not
+	// treat "[query" as a plain word.
+	line := []rune("/say привет [alice-sounds-things-chains")
+	cands, length := c.Do(line, len(line))
+	got := completionStrings(line, cands, length)
+	if len(got) == 0 {
+		t.Fatalf("expected speaker_audio candidates for [alice-sounds-things-chains, got none")
+	}
+	for _, g := range got {
+		if !strings.HasPrefix(g, "alice-sounds-things-chains") {
+			t.Fatalf("candidate %q doesn't extend game-win", g)
+		}
+	}
+}
+
+func TestCompleterBracketSoundInBareText(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+	client := &quasar.Client{}
+	c := newCompleter(a, client)
+
+	// no leading "/" at all — bare text also supports [sound]
+	line := []rune("привет [alice-sounds-things-chains")
+	cands, _ := c.Do(line, len(line))
+	if len(cands) == 0 {
+		t.Fatal("expected candidates for bracket in bare text")
+	}
+}
+
+func TestCompleterBracketClosedDoesNotTriggerSoundCompletion(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+	client := &quasar.Client{}
+	c := newCompleter(a, client)
+
+	// "]" already closes the bracket before the cursor -> back to normal
+	// word completion (which for /say's free text offers nothing, since
+	// /say isn't in soundArgCommands).
+	line := []rune("/say [gong-1] говор")
+	cands, _ := c.Do(line, len(line))
+	if len(cands) != 0 {
+		t.Fatalf("expected no candidates once bracket is closed, got %v", cands)
+	}
+}
+
+func TestLastUnclosedBracket(t *testing.T) {
+	if _, ok := lastUnclosedBracket("no brackets here"); ok {
+		t.Fatal("expected no match")
+	}
+	if idx, ok := lastUnclosedBracket("привет [gong"); !ok || idx != len("привет ") {
+		t.Fatalf("idx=%d ok=%v", idx, ok)
+	}
+	if _, ok := lastUnclosedBracket("[gong-1] после"); ok {
+		t.Fatal("bracket already closed, should not match")
+	}
+}
