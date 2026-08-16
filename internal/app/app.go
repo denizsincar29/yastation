@@ -195,6 +195,29 @@ func formatSoundList(filter string) string {
 	return b.String()
 }
 
+// formatSoundCategories lists only the category names in the sound_play
+// catalog, with a per-category count — no individual sound ids/names.
+func formatSoundCategories() string {
+	counts := map[string]int{}
+	for _, e := range sounds.Effects() {
+		counts[e.Category]++
+	}
+	if len(counts) == 0 {
+		return "звуков в каталоге нет"
+	}
+	cats := make([]string, 0, len(counts))
+	for c := range counts {
+		cats = append(cats, c)
+	}
+	sort.Strings(cats)
+	var b strings.Builder
+	for _, c := range cats {
+		fmt.Fprintf(&b, "%s (%d)\n", c, counts[c])
+	}
+	fmt.Fprintf(&b, "Всего категорий: %d", len(cats))
+	return b.String()
+}
+
 // notifyVolume extracts an optional "volume=X" argument for /notify,
 // defaulting to 0.4 (matching the reference behaviour) when absent.
 // notifyVolume extracts an optional "volume=X" argument for /notify,
@@ -418,6 +441,12 @@ func (a *App) registerCommands() {
 			filter := strings.ToLower(strings.TrimSpace(dispatch.Rest(args)))
 			return formatSoundList(filter), nil
 		}, "sounds", "soundlist")
+
+	d.HandleCat("Экспериментально",
+		"Только список категорий звуков (без раскрытия содержимого) — дальше сузить: /sounds <категория>",
+		func(ctx context.Context, args []string) (string, error) {
+			return formatSoundCategories(), nil
+		}, "sndcat", "soundcategories")
 
 	d.HandleCat("Экспериментально",
 		"Жёсткий стоп всего (не то же самое, что /stop): /stopall [станция]",

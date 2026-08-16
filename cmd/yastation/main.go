@@ -15,11 +15,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/chzyer/readline"
 	"github.com/denizsincar29/yastation/internal/app"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
@@ -149,7 +151,58 @@ func speakerNames(speakers []quasar.Device) string {
 	return strings.Join(names, ", ")
 }
 
+// repl reads commands interactively with readline-style editing: history
+// navigable via the up/down arrows (like Python's input() gets for free
+// from GNU readline), left/right/Home/End/Backspace, Ctrl+C to cancel
+// the current line, Ctrl+D/EOF to quit. History is in-memory for the
+// session only — nothing is written to disk.
+//
+// If stdin isn't a real terminal (piped input, some non-standard
+// terminal readline can't drive), it falls back to plain line-by-line
+// reading with no history — same as before this feature existed, so
+// nothing regresses for scripted/non-interactive use.
 func repl(ctx context.Context, a *app.App) {
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:                 "> ",
+		DisableAutoSaveHistory: true, // we save manually below, skipping blanks/immediate repeats
+	})
+	if err != nil {
+		replPlain(ctx, a)
+		return
+	}
+	defer rl.Close()
+
+	var lastLine string
+	for {
+		line, err := rl.Readline()
+		if err != nil { // io.EOF (Ctrl+D) or readline.ErrInterrupt (Ctrl+C)
+			if errors.Is(err, readline.ErrInterrupt) {
+				continue
+			}
+			break
+		}
+		if line == "" {
+			continue
+		}
+		if line != lastLine {
+			rl.SaveHistory(line)
+			lastLine = line
+		}
+		out, err := a.Execute(ctx, line)
+		if err != nil {
+			fmt.Println("Ошибка:", err)
+		} else if out != "" {
+			fmt.Println(out)
+		}
+	}
+	fmt.Println("\nОтключено.")
+}
+
+// replPlain is the original bufio-based reader, kept as a fallback for
+// when readline can't take over the terminal (e.g. piped/redirected
+// stdin) — no arrow-key history there, but that was never expected to
+// work over a pipe anyway.
+func replPlain(ctx context.Context, a *app.App) {
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("> ")
 	for scanner.Scan() {

@@ -540,3 +540,19 @@ func mustExec(t *testing.T, a *App, line string) string {
 	}
 	return out
 }
+
+func TestSndcatListsCategoriesOnly(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	out := mustExec(t, a, "/sndcat")
+	if strings.Contains(out, "cough-1") {
+		t.Fatalf("/sndcat should not list individual sound ids: %q", out)
+	}
+	if !strings.Contains(out, "Люди") || !strings.Contains(out, "Всего категорий:") {
+		t.Fatalf("missing expected category info: %q", out)
+	}
+	out2 := mustExec(t, a, "/soundcategories")
+	if out2 != out {
+		t.Fatalf("/soundcategories should match /sndcat")
+	}
+}
