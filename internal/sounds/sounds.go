@@ -36,6 +36,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -57,10 +58,23 @@ type Effect struct {
 // library. FullID has no "alice-sounds-"/"alice-music-" ambiguity baked
 // in twice — it's the complete id as it appears in the tag, e.g.
 // "alice-sounds-game-win-1" (no ".opus", no surrounding markup).
+//
+// ShortID/ShortRU are derived at load time (see deriveShortID/
+// deriveShortRU), not part of the JSON data: FullID always carries an
+// "alice-sounds-<category>-"/"alice-music-" prefix that's pure noise for
+// a human typing a query or tab-completing one — "bell-1" reads and
+// types the same as "alice-sounds-things-bell-1" but without the noise.
+// Uniqueness isn't guaranteed (e.g. every violin note collapses to the
+// same ShortRU "скрипка", since they're only distinguished by a note
+// name, not a number) — an ambiguous short form just surfaces its
+// collisions as FindSpeakerAudio candidates, same as any other ambiguous
+// query.
 type SpeakerAudio struct {
 	FullID   string `json:"full_id"`
 	NameRU   string `json:"name_ru"`
 	Category string `json:"category"`
+	ShortID  string `json:"-"`
+	ShortRU  string `json:"-"`
 }
 
 var (
@@ -75,6 +89,77 @@ func init() {
 	if err := json.Unmarshal(speakerAudioJSON, &speakerAudios); err != nil {
 		panic("internal/sounds: speaker_audio.json повреждён: " + err.Error())
 	}
+	for i := range speakerAudios {
+		speakerAudios[i].ShortID = deriveShortID(speakerAudios[i].FullID)
+		speakerAudios[i].ShortRU = deriveShortRU(speakerAudios[i].NameRU)
+		// "№" is dropped from the *display* name only after ShortRU
+		// already extracted the variant number from it above — it's an
+		// awkward character to type and a mouthful for a screen reader
+		// ("номер один" vs. just "один"), and stripping it doesn't lose
+		// anything: the digit itself stays right where it was.
+		speakerAudios[i].NameRU = strings.ReplaceAll(speakerAudios[i].NameRU, "№", "")
+	}
+}
+
+// speakerAudioCategorySegments are the second path segment in an
+// "alice-sounds-<category>-..." id — stripped along with the
+// "alice-sounds-" prefix itself when deriving ShortID, so
+// "alice-sounds-transport-ship-horn-1" becomes "ship-horn-1" rather than
+// "transport-ship-horn-1".
+var speakerAudioCategorySegments = map[string]bool{
+	"things": true, "animals": true, "game": true,
+	"human": true, "nature": true, "transport": true,
+}
+
+// deriveShortID strips the "alice-sounds-<category>-"/"alice-music-"
+// noise off a speaker_audio FullID, e.g. "alice-sounds-things-bell-1" ->
+// "bell-1", "alice-music-harp-1" -> "harp-1". Verified unique across the
+// whole catalog as of when this was written (no two FullIDs collapse to
+// the same ShortID) — a duplicate isn't a crash, just an ambiguous short
+// form, same as everything else in this package.
+func deriveShortID(fullID string) string {
+	switch {
+	case strings.HasPrefix(fullID, "alice-music-"):
+		return strings.TrimPrefix(fullID, "alice-music-")
+	case strings.HasPrefix(fullID, "alice-sounds-"):
+		rest := strings.TrimPrefix(fullID, "alice-sounds-")
+		if seg, tail, ok := strings.Cut(rest, "-"); ok && speakerAudioCategorySegments[seg] {
+			return tail
+		}
+		return rest
+	default:
+		return fullID
+	}
+}
+
+var (
+	shortRUFirstWordRe = regexp.MustCompile(`^[А-Яа-яЁё]+`)
+	shortRUNumberRe    = regexp.MustCompile(`№(\d+)`)
+)
+
+// deriveShortRU turns a catalog NameRU into a short, typeable RU
+// keyword: the first Cyrillic word, lowercased, plus "-N" if the name
+// carries a "№N" variant marker — "Колокол №1" -> "колокол-1", "Взрыв"
+// (no №) -> "взрыв". Deliberately looks for the number *right after
+// "№"* specifically rather than just the first digit anywhere in the
+// string: several names have an unrelated number earlier, e.g. "Монета
+// (8 бит) №1" — grabbing the first bare digit would produce "монета-8"
+// for both variants (an accidental collision that isn't really
+// ambiguous, just parsed wrong).
+//
+// This looks specifically for the number *right after "№"*, before the
+// display copy of NameRU has it stripped (see init() — ShortRU is
+// derived first, then "№" is removed from the stored NameRU).
+func deriveShortRU(nameRUWithNumeroSign string) string {
+	word := shortRUFirstWordRe.FindString(nameRUWithNumeroSign)
+	if word == "" {
+		return ""
+	}
+	word = strings.ToLower(word)
+	if m := shortRUNumberRe.FindStringSubmatch(nameRUWithNumeroSign); m != nil {
+		return word + "-" + m[1]
+	}
+	return word
 }
 
 // Effects returns every known sound_play entry.
@@ -108,11 +193,14 @@ func slug(id string) string {
 // FindSpeakerAudio: exact id match first; then an id whose "full slug"
 // (id with "-" turned into spaces, digits kept — e.g. "win 1") or "base
 // slug" (same, but with the trailing "-N" variant number stripped —
-// "win") exactly equals the query; then a substring match against the
-// full slug or the Russian name. Ambiguous (2+ partial matches) or
-// empty results come back as candidates with ok=false rather than
-// guessing.
-func find[T any](query string, items []T, id func(T) string, name func(T) string) (matchID string, candidates []T, ok bool) {
+// "win") exactly equals the query, or one of aliases(it) does (e.g.
+// SpeakerAudio's ShortID/ShortRU — "bell-1", "колокол-1" — which, unlike
+// full/base slug, keep their own "-" rather than becoming spaces, since
+// that's how they're actually typed/tab-completed); then a substring
+// match against any of those or the Russian name. Ambiguous (2+ partial
+// matches) or empty results come back as candidates with ok=false rather
+// than guessing.
+func find[T any](query string, items []T, id func(T) string, aliases func(T) []string, name func(T) string) (matchID string, candidates []T, ok bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return "", nil, false
@@ -126,10 +214,25 @@ func find[T any](query string, items []T, id func(T) string, name func(T) string
 	for _, it := range items {
 		full := strings.ToLower(strings.ReplaceAll(id(it), "-", " "))
 		base := strings.ToLower(slug(id(it)))
+		nameLower := strings.ToLower(name(it))
+		matched := full == q || base == q
+		partialMatch := strings.Contains(full, q) || strings.Contains(nameLower, q)
+		for _, alias := range aliases(it) {
+			if alias == "" {
+				continue
+			}
+			alias = strings.ToLower(alias)
+			if alias == q {
+				matched = true
+			}
+			if strings.Contains(alias, q) {
+				partialMatch = true
+			}
+		}
 		switch {
-		case full == q || base == q:
+		case matched:
 			exact = append(exact, it)
-		case strings.Contains(full, q) || strings.Contains(strings.ToLower(name(it)), q):
+		case partialMatch:
 			partial = append(partial, it)
 		}
 	}
@@ -151,13 +254,17 @@ func find[T any](query string, items []T, id func(T) string, name func(T) string
 func FindEffect(query string) (id string, candidates []Effect, ok bool) {
 	return find(query, effects,
 		func(e Effect) string { return e.ID },
+		func(e Effect) []string { return nil }, // sound_play ids are already short — no separate alias needed
 		func(e Effect) string { return e.NameRU })
 }
 
-// FindSpeakerAudio is FindEffect for the SpeakerAudio catalog.
+// FindSpeakerAudio is FindEffect for the SpeakerAudio catalog — also
+// resolves ShortID ("bell-1") and ShortRU ("колокол-1"), not just the
+// full "alice-sounds-..." id or the full Russian name.
 func FindSpeakerAudio(query string) (fullID string, candidates []SpeakerAudio, ok bool) {
 	return find(query, speakerAudios,
 		func(a SpeakerAudio) string { return a.FullID },
+		func(a SpeakerAudio) []string { return []string{a.ShortID, a.ShortRU} },
 		func(a SpeakerAudio) string { return a.NameRU })
 }
 

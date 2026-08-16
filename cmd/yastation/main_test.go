@@ -267,3 +267,45 @@ func TestLastUnclosedBracket(t *testing.T) {
 		t.Fatal("bracket already closed, should not match")
 	}
 }
+
+func TestCompleterBracketShortEnglishID(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+	client := &quasar.Client{}
+	c := newCompleter(a, client)
+
+	line := []rune("/say [bell-")
+	cands, length := c.Do(line, len(line))
+	got := completionStrings(line, cands, length)
+	want := map[string]bool{"bell-1": true, "bell-2": true}
+	if len(got) != 2 {
+		t.Fatalf("got=%v", got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Fatalf("unexpected candidate %q", g)
+		}
+	}
+}
+
+func TestCompleterBracketShortRussianKeyword(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	defer a.Close()
+	client := &quasar.Client{}
+	c := newCompleter(a, client)
+
+	line := []rune("[колокол-")
+	cands, length := c.Do(line, len(line))
+	got := completionStrings(line, cands, length)
+	want := map[string]bool{"колокол-1": true, "колокол-2": true}
+	if len(got) != 2 {
+		t.Fatalf("got=%v", got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Fatalf("unexpected candidate %q", g)
+		}
+	}
+}
