@@ -19,11 +19,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/chzyer/readline"
 	"github.com/denizsincar29/yastation/internal/app"
 	"github.com/denizsincar29/yastation/internal/quasar"
+	"github.com/denizsincar29/yastation/internal/sounds"
 )
 
 // stringList collects repeated -c flags in the order they were given.
@@ -121,7 +123,7 @@ func main() {
 	}
 
 	fmt.Println("Пиши текст — он будет озвучен станцией. Команды — с /, /help — список.")
-	repl(ctx, a)
+	repl(ctx, a, client)
 }
 
 // runOnce executes each command line in order, printing output/errors as
@@ -161,10 +163,11 @@ func speakerNames(speakers []quasar.Device) string {
 // terminal readline can't drive), it falls back to plain line-by-line
 // reading with no history — same as before this feature existed, so
 // nothing regresses for scripted/non-interactive use.
-func repl(ctx context.Context, a *app.App) {
+func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:                 "> ",
 		DisableAutoSaveHistory: true, // we save manually below, skipping blanks/immediate repeats
+		AutoComplete:           newCompleter(a, client),
 	})
 	if err != nil {
 		replPlain(ctx, a)
@@ -220,4 +223,101 @@ func replPlain(ctx context.Context, a *app.App) {
 		fmt.Print("> ")
 	}
 	fmt.Println("\nОтключено.")
+}
+
+// completer implements readline.AutoCompleter. Tab completion covers:
+//   - the command itself, at the start of the line ("/sou<TAB>" -> "/sound", "/sounds", "/soundlist", "/soundcategories", "/sndcat")
+//   - sound ids as the last argument to /sound, /sounds or /soundlist
+//     (their aliases included) — e.g. "/sound coug<TAB>" -> "/sound cough-1"/"cough-2"
+//   - a real speaker name right after "station=", for any command —
+//     e.g. "/volume station=Кух<TAB>" -> the matching device name(s)
+//
+// It intentionally does NOT try to complete every command's own free-text
+// arguments (song names, timer durations, ...) — those aren't from a
+// closed set, so there's nothing useful to offer.
+type completer struct {
+	commands []string // every registered name/alias, with the leading "/"
+	soundIDs []string
+	stations []string
+}
+
+// soundArgCommands are the command names (without the leading "/",
+// canonical name or alias — any of them) whose last argument is a
+// sound_play id/query, so tab-completing against the sound catalog makes
+// sense there.
+var soundArgCommands = map[string]bool{
+	"sound":     true,
+	"sounds":    true,
+	"soundlist": true,
+}
+
+func newCompleter(a *app.App, client *quasar.Client) *completer {
+	seen := map[string]bool{}
+	var commands []string
+	for _, n := range a.Dispatcher.Names() {
+		full := "/" + n
+		if !seen[full] {
+			seen[full] = true
+			commands = append(commands, full)
+		}
+	}
+	sort.Strings(commands)
+
+	var soundIDs []string
+	for _, e := range sounds.Effects() {
+		soundIDs = append(soundIDs, e.ID)
+	}
+	sort.Strings(soundIDs)
+
+	var stations []string
+	for _, d := range client.Speakers {
+		stations = append(stations, d.Name)
+	}
+	sort.Strings(stations)
+
+	return &completer{commands: commands, soundIDs: soundIDs, stations: stations}
+}
+
+// Do implements readline.AutoCompleter. line is the whole buffer, pos is
+// the cursor offset into it (in runes) — only the part before the cursor
+// is used to figure out what's being completed. Return value: candidate
+// suffixes to append (not full replacements) and how many trailing runes
+// of the already-typed word they replace/extend.
+func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
+	text := string(line[:pos])
+	wordStart := strings.LastIndexAny(text, " \t")
+	word := text[wordStart+1:]
+	typedBefore := strings.Fields(text[:wordStart+1])
+
+	switch {
+	case len(typedBefore) == 0 && strings.HasPrefix(word, "/"):
+		return completeAgainst(c.commands, word)
+
+	case strings.HasPrefix(word, "station="):
+		val := strings.TrimPrefix(word, "station=")
+		cands, n := completeAgainst(c.stations, val)
+		return cands, n // length is relative to val, not the "station=" prefix — correct as-is
+
+	case len(typedBefore) >= 1:
+		cmd := strings.TrimPrefix(typedBefore[0], "/")
+		if soundArgCommands[cmd] {
+			return completeAgainst(c.soundIDs, word)
+		}
+	}
+	return nil, 0
+}
+
+// completeAgainst returns every option in options that starts with word
+// (case-insensitively), as the runes remaining after word, plus len(word)
+// in runes — matching what readline.AutoCompleter.Do expects.
+func completeAgainst(options []string, word string) (newLine [][]rune, length int) {
+	lw := strings.ToLower(word)
+	wordLen := len([]rune(word))
+	var out [][]rune
+	for _, o := range options {
+		if strings.HasPrefix(strings.ToLower(o), lw) {
+			out = append(out, []rune(o)[wordLen:])
+		}
+	}
+	return out, wordLen
 }
