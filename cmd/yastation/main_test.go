@@ -187,3 +187,17 @@ func completionStrings(line []rune, cands [][]rune, length int) []string {
 	}
 	return out
 }
+
+func TestNormalizeCFlagCommandsAddsMissingSlash(t *testing.T) {
+	commands := []string{"pause", "/volume 0.3", "every 30m /say вода"}
+	normalizeCFlagCommands(commands)
+	want := []string{"/pause", "/volume 0.3", "/every 30m /say вода"}
+	if len(commands) != len(want) {
+		t.Fatalf("commands=%v", commands)
+	}
+	for i := range want {
+		if commands[i] != want[i] {
+			t.Fatalf("commands[%d]=%q want %q", i, commands[i], want[i])
+		}
+	}
+}

@@ -6,10 +6,19 @@
 // without dropping into the interactive prompt:
 //
 //	yastation "привет с компа"              # one free-text command, exits
-//	yastation -c "/volume 0.3"              # one explicit command, exits
-//	yastation -c "/volume 0.3" -c "/say привет"   # several, run in order, exits
-//	yastation -e examples/morning.txt        # shorthand for -c "/execute ..."
-//	yastation -c "/every 30m /say вода" -i    # schedule something, then stay in the REPL
+//	yastation -c "volume 0.3"               # one explicit command, exits
+//	yastation -c "volume 0.3" -c "say привет"   # several, run in order, exits
+//	yastation -e examples/morning.txt        # shorthand for -c "execute ..."
+//	yastation -c "every 30m /say вода" -i    # schedule something, then stay in the REPL
+//
+// -c's value is "command [args...]" — the leading "/" of the command
+// name itself is added automatically if missing (and left alone if you
+// do type it), because Git Bash rewrites an argument that starts with a
+// literal "/" into a Windows path before Go ever sees it (that's the
+// "-c" value as a whole, not anything embedded further inside it —
+// /every's own nested "/say вода" argument above still needs its own
+// "/", since that's parsed by /every's own handler afterward, not by
+// this auto-slash step).
 package main
 
 import (
@@ -42,15 +51,17 @@ func main() {
 	var scriptPath string
 	var forceInteractive bool
 	var configPath string
-	flag.Var(&commands, "c", "выполнить одну команду и продолжить (можно указывать несколько раз), например -c \"/say привет\"")
+	var noReadline bool
+	flag.Var(&commands, "c", "выполнить одну команду и продолжить (можно указывать несколько раз), например -c \"volume 0.3\"")
 	flag.StringVar(&scriptPath, "e", "", "выполнить скрипт файлом (как /execute путь) и выйти")
 	flag.BoolVar(&forceInteractive, "i", false, "остаться в интерактивном REPL после выполнения -c/-e")
 	flag.StringVar(&configPath, "config", os.Getenv("YASTATION_COMMANDS_FILE"), "путь к JSON со своими командами (см. examples/commands.json); по умолчанию из YASTATION_COMMANDS_FILE")
+	flag.BoolVar(&noReadline, "noreadline", os.Getenv("YASTATION_NO_READLINE") != "", "обычный построчный ввод вместо readline (без истории/tab) — на случай если readline глючит под твоим терминалом")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "использование:")
 		fmt.Fprintln(os.Stderr, "  yastation                          интерактивный REPL")
 		fmt.Fprintln(os.Stderr, "  yastation \"текст\"                   сказать текст один раз и выйти")
-		fmt.Fprintln(os.Stderr, "  yastation -c \"/volume 3\" -c \"/say привет\"   несколько команд подряд, потом выход")
+		fmt.Fprintln(os.Stderr, "  yastation -c \"volume 3\" -c \"say привет\"   несколько команд подряд, потом выход")
 		fmt.Fprintln(os.Stderr, "  yastation -e script.txt             выполнить скрипт и выйти")
 		fmt.Fprintln(os.Stderr, "  yastation -c \"...\" -i               выполнить и остаться в REPL")
 		fmt.Fprintln(os.Stderr, "  yastation -config commands.json     подключить свои команды")
@@ -62,6 +73,19 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	// -c values are commands, same grammar as the REPL — but unlike the
+	// REPL, a leading "/" typed on an actual command line gets eaten by
+	// Git Bash's own argv mangling before Go ever sees it: it rewrites
+	// anything that looks like an absolute Unix path, so
+	// `yastation -c "/pause"` arrives here as
+	// `yastation -c "C:\Program Files\Git\pause"`. So -c treats its
+	// value as "command name [args...]" and adds the "/" back itself if
+	// it's missing — write `-c "pause"`, not `-c "/pause"`, and it works
+	// the same either way, on any shell. Positional free text (no -c,
+	// e.g. `yastation "привет с компа"`) stays untouched — that's meant
+	// to be spoken, not run as a command, so there's no slash to add.
+	normalizeCFlagCommands(commands)
 
 	// A single bare positional argument with no flags is shorthand for
 	// one -c: `yastation "привет с компа"`.
@@ -123,7 +147,22 @@ func main() {
 	}
 
 	fmt.Println("Пиши текст — он будет озвучен станцией. Команды — с /, /help — список.")
-	repl(ctx, a, client)
+	if noReadline {
+		replPlain(ctx, a)
+	} else {
+		repl(ctx, a, client)
+	}
+}
+
+// normalizeCFlagCommands prepends "/" to every -c value that's missing
+// one — see the -c handling comment in main for why (Git Bash argv
+// mangling). Modifies commands in place.
+func normalizeCFlagCommands(commands []string) {
+	for i, c := range commands {
+		if !strings.HasPrefix(c, "/") {
+			commands[i] = "/" + c
+		}
+	}
 }
 
 // runOnce executes each command line in order, printing output/errors as
