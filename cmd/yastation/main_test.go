@@ -260,11 +260,22 @@ func TestLastUnclosedBracket(t *testing.T) {
 	if _, ok := lastUnclosedBracket("no brackets here"); ok {
 		t.Fatal("expected no match")
 	}
-	if idx, ok := lastUnclosedBracket("привет [gong"); !ok || idx != len("привет ") {
+	if idx, ok := lastUnclosedBracket("привет [gong"); !ok || idx != len("привет [") {
 		t.Fatalf("idx=%d ok=%v", idx, ok)
 	}
 	if _, ok := lastUnclosedBracket("[gong-1] после"); ok {
 		t.Fatal("bracket already closed, should not match")
+	}
+	// "№" — the Russian-keyboard-friendly alternative to "["/"]"
+	if idx, ok := lastUnclosedBracket("привет №gong"); !ok || idx != len("привет №") {
+		t.Fatalf("idx=%d ok=%v", idx, ok)
+	}
+	if _, ok := lastUnclosedBracket("№gong-1№ после"); ok {
+		t.Fatal("numero-closed marker, should not match")
+	}
+	// whichever opener is nearer to the cursor wins, even mixed
+	if idx, ok := lastUnclosedBracket("[закрыто] №открыто"); !ok || idx != len("[закрыто] №") {
+		t.Fatalf("idx=%d ok=%v", idx, ok)
 	}
 }
 
