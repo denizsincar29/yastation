@@ -24,16 +24,17 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/chzyer/readline"
 	"github.com/denizsincar29/yastation/internal/app"
 	"github.com/denizsincar29/yastation/internal/quasar"
 	"github.com/denizsincar29/yastation/internal/sounds"
+	"github.com/ergochat/readline"
 )
 
 // stringList collects repeated -c flags in the order they were given.
@@ -204,9 +205,9 @@ func speakerNames(speakers []quasar.Device) string {
 // nothing regresses for scripted/non-interactive use.
 func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:                 "> ",
-		DisableAutoSaveHistory: true, // we save manually below, skipping blanks/immediate repeats
-		AutoComplete:           newCompleter(a, client),
+		Prompt:          "> ",
+		InterruptPrompt: "^C",
+		AutoComplete:    newCompleter(a, client),
 	})
 	if err != nil {
 		replPlain(ctx, a)
@@ -214,29 +215,26 @@ func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 	}
 	defer rl.Close()
 
-	var lastLine string
 	for {
-		result := rl.Line()
-		if result.CanContinue() {
-			// Ctrl+C with text already typed — shell-like behaviour:
-			// discard that line, stay in the REPL, fresh prompt.
-			continue
+		line, err := rl.ReadLine()
+		if err != nil {
+			if errors.Is(err, readline.ErrInterrupt) {
+				// Same as bash: Ctrl+C alone never exits, it just
+				// cancels whatever's on the current line (this library
+				// doesn't distinguish an empty line from a typed one on
+				// interrupt — the buffer is always discarded either
+				// way) and gives a fresh prompt. Ctrl+D/EOF below is
+				// the actual way out.
+				continue
+			}
+			break // io.EOF (Ctrl+D) or a real read error
 		}
-		if result.CanBreak() {
-			// Ctrl+C on an *empty* line, or Ctrl+D/EOF — actually quit.
-			// (The previous version continued unconditionally on any
-			// interrupt, which is why Ctrl+C looked like it "did
-			// nothing" — there was no way to ever exit with it.)
-			break
-		}
-		line := result.Line
 		if line == "" {
 			continue
 		}
-		if line != lastLine {
-			rl.SaveHistory(line)
-			lastLine = line
-		}
+		// History is saved automatically by the library on every
+		// non-empty ReadLine() return (DisableAutoSaveHistory defaults
+		// to false) — nothing to do here.
 		out, err := a.Execute(ctx, line)
 		if err != nil {
 			fmt.Println("Ошибка:", err)
