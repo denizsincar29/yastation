@@ -1,0 +1,4 @@
+Подключаюсь к Яндекс Станции...
+Подключено. Колонок найдено: 1 (Папина Алиса)
+Загружено стандартных команд: 10 (из C:\Users\denizsincar29\AppData\Roaming\yastation\config.json)
+Алиса сказала: C:/Program Files/Git/capabilities
