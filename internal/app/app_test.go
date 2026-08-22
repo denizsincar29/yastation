@@ -86,6 +86,23 @@ func TestTildeWithoutTextErrors(t *testing.T) {
 	}
 }
 
+func TestSemicolonPrefixIsWhisperAliasTooForRussianLayout(t *testing.T) {
+	// ";" (Shift+4 on a Russian keyboard) does the same thing as "~" —
+	// "~" needs a switch to Latin layout first, ";" doesn't.
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.Execute(context.Background(), ";тише едешь")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "[шёпотом] тише едешь" {
+		t.Fatalf("out=%q", out)
+	}
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != "whisper::тише едешь" {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
 func TestSayWithWhisperSegmentSendsTwoSeparateCalls(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()

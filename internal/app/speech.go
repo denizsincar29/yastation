@@ -68,27 +68,50 @@ func splitWhisperSegments(text string) []speechSegment {
 	return segs
 }
 
-// expandSoundTags replaces every "[query]" marker in text with the
-// matching <speaker audio="....opus"> tag. An unmatched or ambiguous
-// query is a hard error rather than left as literal "[...]" text —
-// Alice would just read the brackets aloud, which is never what's
-// wanted — listing candidates when there's more than one match.
+// expandSoundTags replaces every "[query]" or "№query№" marker in text
+// with the matching <speaker audio="....opus"> tag. Two delimiter
+// styles because "[" sits off the Russian keyboard layout — typing it
+// means switching to Latin first, same as "~" does for the
+// whisper-line prefix (see registerCommands, which for the same reason
+// also accepts ";" alongside "~"). "№" (Shift+3 on a Russian layout)
+// stays on the same layout as the Russian text around it and is just as
+// rare to run into by accident in ordinary speech as "[" already was.
+// Whichever opener — "[" or "№" — comes first in the remaining text
+// wins for that marker; its own matching closer ("]" or another "№")
+// is what ends it, the two styles don't mix within one marker. An
+// unmatched or ambiguous query is a hard error rather than left as
+// literal "[...]"/"№...№" text — Alice would just read the delimiters
+// aloud, which is never what's wanted — listing candidates when there's
+// more than one match.
 func expandSoundTags(text string) (string, error) {
+	const numero = "№"
 	var b strings.Builder
 	for text != "" {
-		start := strings.IndexByte(text, '[')
-		if start == -1 {
+		bracketIdx := strings.IndexByte(text, '[')
+		numeroIdx := strings.Index(text, numero)
+
+		var start int
+		var openLen int
+		var closeDelim string
+		switch {
+		case bracketIdx == -1 && numeroIdx == -1:
 			b.WriteString(text)
-			break
+			text = ""
+			continue
+		case numeroIdx == -1 || (bracketIdx != -1 && bracketIdx < numeroIdx):
+			start, openLen, closeDelim = bracketIdx, 1, "]"
+		default:
+			start, openLen, closeDelim = numeroIdx, len(numero), numero
 		}
+
 		b.WriteString(text[:start])
-		rest := text[start+1:]
-		end := strings.IndexByte(rest, ']')
+		rest := text[start+openLen:]
+		end := strings.Index(rest, closeDelim)
 		if end == -1 {
-			// No closing bracket — not our markup, keep it literal.
-			b.WriteByte('[')
-			b.WriteString(rest)
-			break
+			// No closing delimiter — not our markup, keep it literal.
+			b.WriteString(text[start:])
+			text = ""
+			continue
 		}
 		query := strings.TrimSpace(rest[:end])
 		fullID, candidates, ok := sounds.FindSpeakerAudio(query)
@@ -96,7 +119,7 @@ func expandSoundTags(text string) (string, error) {
 			return "", fmt.Errorf("%s", sounds.FormatCandidates(query, candidates))
 		}
 		fmt.Fprintf(&b, `<speaker audio="%s.opus">`, fullID)
-		text = rest[end+1:]
+		text = rest[end+len(closeDelim):]
 	}
 	return b.String(), nil
 }

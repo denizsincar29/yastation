@@ -242,7 +242,10 @@ func (a *App) registerCommands() {
 
 	// Free text with no "/" is TTS. A leading "- " is a voice-command
 	// alias for /cmd, e.g. "- какая погода" instead of "/cmd какая погода".
-	// A leading "~" is the whole-line whisper shortcut, mirroring "- ".
+	// A leading "~" is the whole-line whisper shortcut, mirroring "- ";
+	// ";" works the same way and is the one to reach for on a Russian
+	// keyboard layout — "~" needs a switch to Latin first (it's "ё"
+	// otherwise), ";" doesn't.
 	d.Default = func(ctx context.Context, text string) (string, error) {
 		if rest, ok := strings.CutPrefix(text, "- "); ok {
 			if err := a.Client.Command("", rest); err != nil {
@@ -250,10 +253,14 @@ func (a *App) registerCommands() {
 			}
 			return "Алиса услышала команду: " + rest, nil
 		}
-		if rest, ok := strings.CutPrefix(text, "~"); ok {
-			rest = strings.TrimSpace(rest)
+		whisperRest, isWhisper := strings.CutPrefix(text, "~")
+		if !isWhisper {
+			whisperRest, isWhisper = strings.CutPrefix(text, ";")
+		}
+		if isWhisper {
+			rest := strings.TrimSpace(whisperRest)
 			if rest == "" {
-				return "", fmt.Errorf("после ~ нужен текст")
+				return "", fmt.Errorf("после ~ (или ;) нужен текст")
 			}
 			expanded, err := expandSoundTags(rest)
 			if err != nil {
@@ -268,7 +275,7 @@ func (a *App) registerCommands() {
 	}
 
 	d.HandleCat("Основное",
-		"Сказать текст через станцию (TTS). ((текст)) — шёпотом отдельной репликой (слить с обычной речью в одну нельзя — целиком строку шёпотом: ~текст или /whisper); [запрос] — вставить встроенный звук Алисы прямо в речь: /say привет ((это по секрету)) [гонг]",
+		"Сказать текст через станцию (TTS). ((текст)) — шёпотом отдельной репликой (слить с обычной речью в одну нельзя — целиком строку шёпотом: ~текст, ;текст или /whisper); [запрос] или №запрос№ — вставить встроенный звук Алисы прямо в речь (№ вместо [ ] удобнее на русской раскладке): /say привет ((это по секрету)) №гонг№",
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
 			text := dispatch.Rest(rest)

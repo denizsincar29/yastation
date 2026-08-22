@@ -113,6 +113,39 @@ func TestExpandSoundTagsAmbiguousQueryErrors(t *testing.T) {
 	}
 }
 
+func TestExpandSoundTagsNumeroStyle(t *testing.T) {
+	// "№" — the Russian-keyboard-friendly alternative to "[" "]"
+	got, err := expandSoundTags("поздравляю №boot№ с победой")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `поздравляю <speaker audio="alice-sounds-game-boot-1.opus"> с победой`
+	if got != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestExpandSoundTagsMixedStyles(t *testing.T) {
+	got, err := expandSoundTags("[boot] и №boot№ вперемешку")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<speaker audio="alice-sounds-game-boot-1.opus"> и <speaker audio="alice-sounds-game-boot-1.opus"> вперемешку`
+	if got != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestExpandSoundTagsUnclosedNumeroIsLiteral(t *testing.T) {
+	got, err := expandSoundTags("текст №не закрыто")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "текст №не закрыто" {
+		t.Fatalf("got=%q", got)
+	}
+}
+
 func TestSpeakReturnsOriginalTextInConfirmation(t *testing.T) {
 	f := &fakeStation{}
 	out, err := speak(f, "Кухня", "привет ((секрет))")

@@ -353,8 +353,8 @@ func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 	// catalog no matter what command (if any) started the line, since
 	// "[" isn't a word boundary for the usual space-splitting below and
 	// this markup works identically inside /say and bare text.
-	if openIdx, ok := lastUnclosedBracket(text); ok {
-		return completeAgainst(c.speakerAudio, text[openIdx+1:])
+	if start, ok := lastUnclosedBracket(text); ok {
+		return completeAgainst(c.speakerAudio, text[start:])
 	}
 
 	wordStart := strings.LastIndexAny(text, " \t")
@@ -379,20 +379,40 @@ func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 	return nil, 0
 }
 
-// lastUnclosedBracket reports the index of the last "[" in text that
-// has no matching "]" after it — i.e. the cursor sits inside an open
-// "[query" marker (not yet a complete "[query]"). ok is false if there
-// isn't one (no "[" at all, or the last one is already closed before
-// the cursor).
-func lastUnclosedBracket(text string) (idx int, ok bool) {
-	openIdx := strings.LastIndexByte(text, '[')
-	if openIdx == -1 {
-		return 0, false
+// lastUnclosedBracket reports the offset right after the last unclosed
+// sound-tag opener in text — either "[" or "№" (two delimiter styles
+// because "[" sits off the Russian keyboard layout, see
+// expandSoundTags's doc comment for the full story) — i.e. the cursor
+// sits inside an open "[query"/"№query" marker, not yet a complete
+// "[query]"/"№query№". Whichever opener is closer to the end of text
+// wins. ok is false if there isn't one (no opener at all, or the
+// nearest one is already closed before the cursor).
+//
+// "["/"]" are asymmetric, so "last '[' with no ']' after it" is enough
+// to tell an opener from a closer. "№" opens *and* closes with the same
+// rune, so that trick can't tell them apart — LastIndex would just find
+// whichever "№" happens to be last, opener or closer. Parity does:
+// counting "№" occurrences, an odd count means the final one hasn't
+// been closed yet.
+func lastUnclosedBracket(text string) (queryStart int, ok bool) {
+	bracketStart := -1
+	if idx := strings.LastIndexByte(text, '['); idx != -1 && !strings.Contains(text[idx+1:], "]") {
+		bracketStart = idx + 1
 	}
-	if strings.IndexByte(text[openIdx:], ']') != -1 {
-		return 0, false
+
+	numeroStart := -1
+	if strings.Count(text, "№")%2 == 1 {
+		numeroStart = strings.LastIndex(text, "№") + len("№")
 	}
-	return openIdx, true
+
+	switch {
+	case bracketStart == -1 && numeroStart == -1:
+		return 0, false
+	case bracketStart > numeroStart:
+		return bracketStart, true
+	default:
+		return numeroStart, true
+	}
 }
 
 // completeAgainst returns every option in options that starts with word
