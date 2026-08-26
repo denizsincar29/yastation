@@ -59,8 +59,11 @@ func TestMCPRejectsMissingTokenWithoutDefaultAccount(t *testing.T) {
 		t.Fatalf("POST /mcp: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 without X-Yandex-Token and no default account, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 without X-Yandex-Token and no default account (never 401 — see mcpAccountMiddleware), got %d", resp.StatusCode)
+	}
+	if h := resp.Header.Get("WWW-Authenticate"); h != "" {
+		t.Fatalf("must never set WWW-Authenticate (it's the RFC9728 cue for MCP clients to start OAuth discovery), got %q", h)
 	}
 }
 

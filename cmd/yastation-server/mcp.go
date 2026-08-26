@@ -84,15 +84,24 @@ type mcpClientCtxKey struct{}
 // against — the exact same rule runOnAccount (main.go) uses for
 // /command: caller's own X-Yandex-Token if present (checked against the
 // allowlist), else the server's default account if it has one, else a
-// plain 401. Runs *before* the MCP layer, so auth failures come back as
+// rejection. Runs *before* the MCP layer, so auth failures come back as
 // a plain JSON HTTP error instead of an opaque MCP protocol failure.
+//
+// Deliberately always 403, never 401: per the MCP Authorization spec
+// (RFC 9728), a 401 response is a signal to MCP clients that they
+// should attempt OAuth discovery (WWW-Authenticate / .well-known
+// probing, then a browser redirect to an /authorize endpoint we don't
+// have). We're not an OAuth server — X-Yandex-Token is a plain static
+// credential the caller is expected to already have and set as a
+// header, same as the REST endpoints. 403 ("access denied") doesn't
+// carry that OAuth-retry connotation under RFC 9110, so spec-compliant
+// clients treat it as a plain rejection instead of a cue to redirect.
 func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClientCache, loadAccess func() *access.List, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		xToken := r.Header.Get("X-Yandex-Token")
 		if xToken == "" {
 			if defaultClient == nil {
-				writeMCPAuthError(w, http.StatusUnauthorized,
-					"нужен заголовок X-Yandex-Token (сервер запущен без своего аккаунта — BYOT по умолчанию)")
+				writeMCPAuthError(w, "нужен заголовок X-Yandex-Token (сервер запущен без своего аккаунта — BYOT по умолчанию). "+reauthHint)
 				return
 			}
 			ctx := context.WithValue(r.Context(), mcpClientCtxKey{}, defaultClient)
@@ -101,7 +110,7 @@ func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClien
 		}
 		client, _, err := tokenClients.get(xToken, loadAccess())
 		if err != nil {
-			writeMCPAuthError(w, statusForTokenError(err), err.Error())
+			writeMCPAuthError(w, err.Error()+". "+reauthHint)
 			return
 		}
 		ctx := context.WithValue(r.Context(), mcpClientCtxKey{}, client)
@@ -109,9 +118,18 @@ func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClien
 	})
 }
 
-func writeMCPAuthError(w http.ResponseWriter, status int, msg string) {
+// reauthHint is deliberately in English too — MCP client UIs/logs that
+// surface this text tend to render it verbatim, and a short unambiguous
+// instruction beats a client guessing an OAuth flow on its own.
+const reauthHint = "Токен недействителен. Переавторизуйся (go run ./cmd/yastation-auth) и обнови X-Yandex-Token в конфиге клиента. / Token invalid: rerun the authorization and change the header token."
+
+// writeMCPAuthError always answers 403 (see mcpAccountMiddleware for
+// why) and deliberately never sets WWW-Authenticate — that header is
+// specifically what tells spec-compliant MCP clients "start OAuth
+// discovery here", which is the exact behaviour we're avoiding.
+func writeMCPAuthError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, "{%q: %q}\n", "error", msg)
 }
 
