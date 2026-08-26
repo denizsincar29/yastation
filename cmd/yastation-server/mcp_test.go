@@ -13,13 +13,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// fakeClient is a *quasar.Client with a couple of speakers, good enough
-// for exercising the MCP layer without touching the real Yandex API.
-// alice_say/alice_ask/alice_command still end up calling quasar.Client's
-// real HTTP methods (Say/Command/...), which would fail against a fake
-// Session — these tests stick to tool discovery (alice_help/alice_stations)
-// and the auth gate, which don't need a live station.
-func fakeClient() *quasar.Client {
+// mcpFakeClient is a *quasar.Client with a couple of speakers, good
+// enough for exercising the MCP layer without touching the real Yandex
+// API. alice_say/alice_ask/alice_command still end up calling
+// quasar.Client's real HTTP methods (Say/Command/...), which would fail
+// against a fake Session — these tests stick to tool discovery
+// (alice_help/alice_stations) and the auth gate, which don't need a
+// live station.
+func mcpFakeClient() *quasar.Client {
 	return &quasar.Client{
 		Speakers: []quasar.Device{
 			{ID: "dev1", Name: "Кухня"},
@@ -28,7 +29,7 @@ func fakeClient() *quasar.Client {
 	}
 }
 
-func newTestMux(t *testing.T, allowedUID string) http.Handler {
+func newMCPTestMux(t *testing.T, allowedUID string, defaultClient *quasar.Client) http.Handler {
 	t.Helper()
 
 	tokenClients := newTokenClientCache(time.Minute)
@@ -36,30 +37,21 @@ func newTestMux(t *testing.T, allowedUID string) http.Handler {
 		return quasar.Identity{UID: "uid-" + xToken, RealName: "Тестовый пользователь"}, nil
 	}
 	tokenClients.buildClient = func(xToken string) (*quasar.Client, error) {
-		return fakeClient(), nil
+		return mcpFakeClient(), nil
 	}
 
 	loadAccess := func() *access.List {
 		return &access.List{Entries: []access.Entry{{UID: allowedUID}}}
 	}
 
-	getServer := func(r *http.Request) *mcp.Server {
-		client, ok := r.Context().Value(clientCtxKey{}).(*quasar.Client)
-		if !ok || client == nil {
-			return nil
-		}
-		return buildMCPServer(client, r.Header.Get("X-Station"), nil, nil)
-	}
-	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("/mcp", withYandexAuth(tokenClients, loadAccess, mcpHandler))
+	mux.Handle("/mcp", mcpRoute(defaultClient, tokenClients, nil, nil, loadAccess))
 	return mux
 }
 
-func TestMCPRejectsMissingToken(t *testing.T) {
-	srv := httptest.NewServer(newTestMux(t, "uid-good-token"))
+func TestMCPRejectsMissingTokenWithoutDefaultAccount(t *testing.T) {
+	srv := httptest.NewServer(newMCPTestMux(t, "uid-good-token", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/mcp", "application/json", strings.NewReader(`{}`))
@@ -68,12 +60,32 @@ func TestMCPRejectsMissingToken(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 without X-Yandex-Token, got %d", resp.StatusCode)
+		t.Fatalf("expected 401 without X-Yandex-Token and no default account, got %d", resp.StatusCode)
+	}
+}
+
+func TestMCPFallsBackToDefaultAccountWhenNoToken(t *testing.T) {
+	srv := httptest.NewServer(newMCPTestMux(t, "uid-good-token", mcpFakeClient()))
+	defer srv.Close()
+
+	// No X-Yandex-Token at all — should still work, running against the
+	// server's own default account, same as /command's runOnAccount.
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp"}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("Connect without token (default account) should succeed: %v", err)
+	}
+	defer session.Close()
+
+	if _, err := session.ListTools(ctx, nil); err != nil {
+		t.Fatalf("ListTools: %v", err)
 	}
 }
 
 func TestMCPRejectsUnallowedToken(t *testing.T) {
-	srv := httptest.NewServer(newTestMux(t, "uid-good-token"))
+	srv := httptest.NewServer(newMCPTestMux(t, "uid-good-token", nil))
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", strings.NewReader(`{}`))
@@ -94,7 +106,7 @@ func TestMCPRejectsUnallowedToken(t *testing.T) {
 // required headers, list tools, and call alice_help/alice_stations.
 func TestMCPEndToEnd(t *testing.T) {
 	const goodToken = "good-token"
-	srv := httptest.NewServer(newTestMux(t, "uid-"+goodToken))
+	srv := httptest.NewServer(newMCPTestMux(t, "uid-"+goodToken, nil))
 	defer srv.Close()
 
 	ctx := context.Background()
@@ -103,7 +115,7 @@ func TestMCPEndToEnd(t *testing.T) {
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: srv.URL + "/mcp",
 		HTTPClient: &http.Client{
-			Transport: &headerInjectingRoundTripper{
+			Transport: &mcpHeaderInjectingRoundTripper{
 				base: http.DefaultTransport,
 				headers: map[string]string{
 					"X-Yandex-Token": goodToken,
@@ -162,15 +174,16 @@ func TestMCPEndToEnd(t *testing.T) {
 	}
 }
 
-// headerInjectingRoundTripper attaches fixed headers to every outgoing
-// request, simulating how a remote-MCP-connector config (static
-// per-connector headers) would authenticate against this server.
-type headerInjectingRoundTripper struct {
+// mcpHeaderInjectingRoundTripper attaches fixed headers to every
+// outgoing request, simulating how a remote-MCP-connector config
+// (static per-connector headers) would authenticate against this
+// server.
+type mcpHeaderInjectingRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
 }
 
-func (h *headerInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (h *mcpHeaderInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	for k, v := range h.headers {
 		req.Header.Set(k, v)

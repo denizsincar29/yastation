@@ -43,6 +43,18 @@
 // for an account that isn't on the list gets rejected regardless, so
 // YASTATION_HTTP_TOKEN is defense-in-depth rather than the only thing
 // standing between your server and abuse.
+//
+// Besides the REST endpoints above, POST/GET /mcp on the same port
+// speaks MCP (Streamable HTTP) — same X-Yandex-Token/X-Station headers,
+// same allowlist, same optional default-account fallback, same
+// YASTATION_HTTP_TOKEN gate; see mcp.go. One process, one port, no
+// separate server to run just for MCP.
+//
+// `-stdio` is a third, unrelated mode: skips HTTP entirely and serves
+// MCP over stdin/stdout for a single already-authenticated local
+// account (the one from cmd/yastation-auth) — the shape Claude Desktop
+// and friends expect from claude_desktop_config.json's "command"+"args".
+// See mcp.go's runStdio.
 package main
 
 import (
@@ -52,6 +64,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -67,12 +80,8 @@ import (
 )
 
 func main() {
-	addr := envOr("YASTATION_HTTP_ADDR", ":8737")
-	token := os.Getenv("YASTATION_HTTP_TOKEN")
-	if token == "" {
-		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
-		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
-	}
+	stdio := flag.Bool("stdio", false, "запустить как локальный stdio MCP-сервер (Claude Desktop и т.п.) вместо HTTP")
+	flag.Parse()
 
 	defaultsPath := app.ConfigFilePath()
 	if err := app.EnsureConfigFile(defaultsPath); err != nil {
@@ -92,6 +101,21 @@ func main() {
 		}
 		customCfg = cfg
 		log.Printf("Загружено своих команд: %d (из %s)", len(cfg.Commands), p)
+	}
+
+	if *stdio {
+		runStdio(defaultsCfg, customCfg)
+		return
+	}
+	runHTTP(defaultsCfg, customCfg)
+}
+
+func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
+	addr := envOr("YASTATION_HTTP_ADDR", ":8737")
+	token := os.Getenv("YASTATION_HTTP_TOKEN")
+	if token == "" {
+		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
+		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
 	}
 
 	if legacy := os.Getenv("YASTATION_BYOT_ONLY"); legacy != "" {
@@ -118,10 +142,13 @@ func main() {
 	// useDefaultAccount: opt-in only. By default the server has no
 	// Yandex account of its own — every request must bring its own
 	// X-Yandex-Token. Set this to also keep a default account (from
-	// yastation-auth) for requests that don't carry one.
+	// yastation-auth) for requests that don't carry one — used by both
+	// the REST endpoints below (see runOnAccount) and /mcp (see
+	// withYandexAuth in mcp.go).
 	useDefaultAccount := os.Getenv("YASTATION_USE_DEFAULT_ACCOUNT") != ""
 
-	var a *app.App
+	var defaultApp *app.App
+	var defaultClient *quasar.Client
 	if !useDefaultAccount {
 		log.Println("BYOT (по умолчанию): своего аккаунта нет, каждый запрос должен нести X-Yandex-Token с аккаунта из списка допуска")
 	} else {
@@ -136,23 +163,25 @@ func main() {
 			names[i] = d.Name
 		}
 		log.Printf("Подключено. Колонок найдено: %d (%s)", len(client.Speakers), strings.Join(names, ", "))
-		a = buildApp(client, defaultsCfg, customCfg)
-		defer a.Close()
+		defaultClient = client
+		defaultApp = buildApp(client, defaultsCfg, customCfg)
+		defer defaultApp.Close()
 	}
 
 	tokenClients := newTokenClientCache(20 * time.Minute)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("POST /command", handleCommand(a, tokenClients, defaultsCfg, customCfg, loadAccess))
+	mux.HandleFunc("POST /command", handleCommand(defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess))
 	mux.HandleFunc("GET /commands", handleCommandsList(defaultsCfg, customCfg))
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, tokenClients, defaultsCfg, customCfg, loadAccess))
-	mux.HandleFunc("GET /schedules", handleSchedules(a))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess))
+	mux.HandleFunc("GET /schedules", handleSchedules(defaultApp))
 	mux.HandleFunc("GET /stations", handleStations(tokenClients, loadAccess))
+	mux.Handle("/mcp", mcpRoute(defaultClient, tokenClients, defaultsCfg, customCfg, loadAccess))
 
 	handler := withAuth(token, withLogging(mux))
 
-	log.Println("Слушаю на", addr)
+	log.Println("Слушаю на", addr, "— REST: /command, /commands; MCP (Streamable HTTP): /mcp")
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
