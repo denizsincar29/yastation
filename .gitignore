@@ -8,3 +8,7 @@ tokens.json
 .env
 __pycache__/
 *.pyc
+
+# личный тестовый скрипт с реальными токенами внутри — не для гита,
+# см. clients/python/yastation_client.py для чистого клиента без секретов
+clients/python/client.py
