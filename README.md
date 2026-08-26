@@ -356,7 +356,7 @@ per-connector-заголовками — тот же принцип, что у B
 `PROTOCOL_NOTES.md`). Инструмент лишь подтверждает, что команда
 отправлена.
 
-### Подключение
+### Подключение (HTTP, удалённо/многопользовательски)
 
 Как удалённый коннектор с двумя статическими заголовками — способ
 зависит от конкретного ИИ-клиента/хоста; общая идея (пример для
@@ -375,7 +375,57 @@ per-connector-заголовками — тот же принцип, что у B
 
 За Caddy на VPS — обычный reverse proxy на `127.0.0.1:8738` под
 поддомен, тем же паттерном, что и у остальных сервисов на
-`denizsincar.ru`.
+`denizsincar.ru`. Учти: не все MCP-хосты умеют слать произвольные
+заголовки прямо из json-конфига (например, ванильный
+`claude_desktop_config.json` — нет, только через прокси вроде
+`mcp-remote`); для Claude Desktop проще способ ниже.
+
+### Подключение (`-stdio`, локально, Claude Desktop)
+
+Флаг `-stdio` переключает `yastation-mcp` в локальный режим: без HTTP,
+без заголовков, говорит MCP прямо через stdin/stdout — то, что умеет
+любой MCP-хост из коробки, включая `claude_desktop_config.json`.
+Использует уже сохранённый аккаунт (тот же `tokens.json`, что у REPL) —
+если ещё не логинился, сначала `go run ./cmd/yastation-auth`.
+
+Собери бинарь и пропиши в `claude_desktop_config.json`
+(`%APPDATA%\Claude\claude_desktop_config.json` на Windows):
+
+```bash
+go build -o yastation-mcp.exe ./cmd/yastation-mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "yastation": {
+      "command": "C:\\Users\\denizsincar29\\files\\gos\\yastation\\yastation-mcp.exe",
+      "args": ["-stdio"]
+    }
+  }
+}
+```
+
+Текущая директория `command` не важна — путь к бинарю уже абсолютный,
+а сам `yastation-mcp` ничего не читает по относительным путям (конфиг
+команд и `tokens.json`/`access.json` резолвятся через `os.UserConfigDir()`,
+т.е. от домашней папки пользователя, не от cwd процесса). `cwd` имело
+бы значение, только если бы ты передавал относительный путь в
+`YASTATION_COMMANDS_FILE` — тогда его лучше сделать абсолютным на
+всякий случай.
+
+Хочешь станцию по умолчанию не как в REPL, а конкретно для Desktop —
+можно добавить `"env"` в этот же блок конфига:
+
+```json
+"env": { "YASTATION_STATION_NAME": "Кухня" }
+```
+
+(тот же `YASTATION_STATION_NAME`/`YASTATION_STATION_ID`, что понимает
+`quasar.Connect()` — см. REPL/HTTP default-account режим).
+
+После сохранения файла — полный перезапуск Claude Desktop (не просто
+новое окно).
 
 ### Python-клиент
 

@@ -29,6 +29,18 @@
 // protocol gives no way to capture it as text, see PROTOCOL_NOTES.md
 // and internal/quasar. So alice_ask confirms the command was sent, it
 // does not — cannot — return what Alice said back.
+//
+// Two ways to run it:
+//
+//   - Default (HTTP): the multi-account server described above, meant
+//     to sit behind a reverse proxy so several people/AIs can each use
+//     their own X-Yandex-Token.
+//   - `-stdio`: a local single-account server for Claude Desktop's
+//     claude_desktop_config.json ("command"+"args", launched as a
+//     subprocess talking MCP over stdin/stdout — no networking, no
+//     headers). Uses whatever account is already logged in via
+//     cmd/yastation-auth (same tokens.json the REPL uses), so there's
+//     nothing Yandex-related to put in the json config at all.
 package main
 
 import (
@@ -36,6 +48,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -51,8 +64,22 @@ import (
 )
 
 func main() {
-	addr := envOr("YASTATION_MCP_ADDR", ":8738")
+	stdio := flag.Bool("stdio", false, "запустить как локальный stdio MCP-сервер (для claude_desktop_config.json) вместо HTTP")
+	flag.Parse()
 
+	defaultsCfg, customCfg := loadCommandConfigs()
+
+	if *stdio {
+		runStdio(defaultsCfg, customCfg)
+		return
+	}
+	runHTTP(defaultsCfg, customCfg)
+}
+
+// loadCommandConfigs loads the standard config.json.default plus an
+// optional custom commands file (YASTATION_COMMANDS_FILE) — shared by
+// both the HTTP and stdio entry points.
+func loadCommandConfigs() (defaultsCfg, customCfg *app.CustomCommandConfig) {
 	defaultsPath := app.ConfigFilePath()
 	if err := app.EnsureConfigFile(defaultsPath); err != nil {
 		log.Fatalf("Не смог создать %s: %v", defaultsPath, err)
@@ -63,7 +90,6 @@ func main() {
 	}
 	log.Printf("Загружено стандартных команд: %d (из %s)", len(defaultsCfg.Commands), defaultsPath)
 
-	var customCfg *app.CustomCommandConfig
 	if p := os.Getenv("YASTATION_COMMANDS_FILE"); p != "" {
 		cfg, err := app.LoadCustomCommandConfig(p)
 		if err != nil {
@@ -72,6 +98,32 @@ func main() {
 		customCfg = cfg
 		log.Printf("Загружено своих команд: %d (из %s)", len(cfg.Commands), p)
 	}
+	return defaultsCfg, customCfg
+}
+
+// runStdio serves one already-authenticated local account over stdio —
+// the shape Claude Desktop (and most other local MCP hosts) expect for
+// a "command"+"args" entry. All log output goes to stderr (Go's log
+// package default), keeping stdout clean for MCP JSON-RPC.
+func runStdio(defaultsCfg, customCfg *app.CustomCommandConfig) {
+	client, err := quasar.Connect()
+	if err != nil {
+		log.Fatalf("Не смог подключиться к сохранённому аккаунту (запусти сперва: go run ./cmd/yastation-auth): %v", err)
+	}
+	log.Printf("Подключено (stdio). Колонок найдено: %d", len(client.Speakers))
+
+	// quasar.Connect() already applies YASTATION_STATION_ID/NAME to
+	// client.DefaultDeviceID/Name (same env vars the REPL/HTTP default-
+	// account mode use) — leave defaultStation empty here so say/ask
+	// fall through to that instead of a second, redundant mechanism.
+	server := buildMCPServer(client, "", defaultsCfg, customCfg)
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		log.Fatalf("stdio-сервер завершился с ошибкой: %v", err)
+	}
+}
+
+func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
+	addr := envOr("YASTATION_MCP_ADDR", ":8738")
 
 	accessPath := access.FilePath()
 	loadAccess := func() *access.List {
