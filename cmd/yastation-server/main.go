@@ -179,9 +179,13 @@ func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	mux.HandleFunc("GET /stations", handleStations(tokenClients, loadAccess))
 	mux.Handle("/mcp", mcpRoute(defaultClient, tokenClients, defaultsCfg, customCfg, loadAccess))
 
+	authStore := newPendingAuthStore(10 * time.Minute)
+	mux.HandleFunc("GET /auth/start", handleAuthStart(authStore))
+	mux.HandleFunc("GET /auth/result", handleAuthResult(authStore))
+
 	handler := withAuth(token, withLogging(mux))
 
-	log.Println("Слушаю на", addr, "— REST: /command, /commands; MCP (Streamable HTTP): /mcp")
+	log.Println("Слушаю на", addr, "— REST: /command, /commands; MCP (Streamable HTTP): /mcp; браузер: /auth/start")
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
@@ -322,6 +326,14 @@ func withAuth(token string, next http.Handler) http.Handler {
 			return
 		}
 		got := r.Header.Get("Authorization")
+		// /auth/start and /auth/result are meant to be opened by hand in
+		// a plain browser tab, which can't set custom headers on a normal
+		// navigation — accept ?token=... there too, alongside the header.
+		if got == "" && strings.HasPrefix(r.URL.Path, "/auth/") {
+			if q := r.URL.Query().Get("token"); q != "" {
+				got = "Bearer " + q
+			}
+		}
 		want := "Bearer " + token
 		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			http.Error(w, `{"ok":false,"error":"unauthorized"}`, http.StatusUnauthorized)
