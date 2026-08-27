@@ -24,7 +24,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -194,10 +193,13 @@ func speakerNames(speakers []quasar.Device) string {
 
 // repl reads commands interactively with readline-style editing: history
 // navigable via the up/down arrows (like Python's input() gets for free
-// from GNU readline), left/right/Home/End/Backspace, Ctrl+C to cancel
-// the current line (or quit if the line is already empty — same as most
-// shells), Ctrl+D/EOF to quit. History is in-memory for the session
-// only — nothing is written to disk.
+// from GNU readline), left/right/Home/End/Backspace, Ctrl+U to clear the
+// line back to its start (standard emacs/readline binding — works
+// whether or not the cursor is at the end), Ctrl+C or Ctrl+D/EOF to
+// quit — same as virtually every terminal program in the world (a shell,
+// python's REPL, etc): Ctrl+C means "stop", not "clear this line and
+// keep going". History is in-memory for the session only — nothing is
+// written to disk.
 //
 // If stdin isn't a real terminal (piped input, some non-standard
 // terminal readline can't drive), it falls back to plain line-by-line
@@ -205,9 +207,8 @@ func speakerNames(speakers []quasar.Device) string {
 // nothing regresses for scripted/non-interactive use.
 func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          "> ",
-		InterruptPrompt: "^C",
-		AutoComplete:    newCompleter(a, client),
+		Prompt:       "> ",
+		AutoComplete: newCompleter(a, client),
 	})
 	if err != nil {
 		replPlain(ctx, a)
@@ -218,16 +219,11 @@ func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 	for {
 		line, err := rl.ReadLine()
 		if err != nil {
-			if errors.Is(err, readline.ErrInterrupt) {
-				// Same as bash: Ctrl+C alone never exits, it just
-				// cancels whatever's on the current line (this library
-				// doesn't distinguish an empty line from a typed one on
-				// interrupt — the buffer is always discarded either
-				// way) and gives a fresh prompt. Ctrl+D/EOF below is
-				// the actual way out.
-				continue
-			}
-			break // io.EOF (Ctrl+D) or a real read error
+			// Both Ctrl+C (readline.ErrInterrupt) and Ctrl+D/EOF (io.EOF)
+			// end the REPL — see the doc comment above for why Ctrl+C
+			// isn't treated as "just clear the line" here, unlike this
+			// library's own default InterruptPrompt-based behaviour.
+			break
 		}
 		if line == "" {
 			continue
