@@ -7,6 +7,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/denizsincar29/yastation/internal/dispatch"
 )
 
 // CustomCommandDef describes one user-defined command, e.g.
@@ -168,60 +170,42 @@ func (a *App) registerCustomCommand(def CustomCommandDef) {
 		category = "Свои команды"
 	}
 
-	a.Dispatcher.HandleCat(category, help, func(ctx context.Context, args []string) (string, error) {
-		st, rest := station(args)
-		values, err := bindCustomParams(def.Params, rest)
-		if err != nil {
-			return "", err
+	params := make([]dispatch.Param, len(def.Params))
+	for i, p := range def.Params {
+		params[i] = dispatch.Param{
+			Name:     strings.TrimSuffix(p, "?"),
+			Kind:     "string",
+			Optional: strings.HasSuffix(p, "?"),
 		}
-		phrase := strings.TrimSpace(renderCustomTemplate(def.Template, values))
+	}
 
-		var sendErr error
-		if def.Kind == "say" {
-			sendErr = a.Client.Say(st, phrase)
-		} else {
-			sendErr = a.Client.Command(st, phrase)
-		}
-		if sendErr != nil {
-			return "", sendErr
-		}
-		return fmt.Sprintf("[%s] %s", def.Name, phrase), nil
-	}, names...)
+	a.Dispatcher.HandleBoundCat(category, help, true, params,
+		func(ctx context.Context, station string, values map[string]string) (string, error) {
+			phrase := strings.TrimSpace(renderCustomTemplate(def.Template, values))
+
+			var sendErr error
+			if def.Kind == "say" {
+				sendErr = a.Client.Say(station, phrase)
+			} else {
+				sendErr = a.Client.Command(station, phrase)
+			}
+			if sendErr != nil {
+				return "", sendErr
+			}
+			return fmt.Sprintf("[%s] %s", def.Name, phrase), nil
+		}, names...)
 }
 
-// bindCustomParams binds args positionally to params. Every param except
-// the last takes exactly one word; the last one takes everything left
-// (joined with spaces), so a final free-text argument can contain spaces.
-// A param name ending in "?" is optional (validateCustomCommandDef
-// guarantees only trailing params carry it) — if there aren't enough args
-// to reach it, it's bound to "" instead of erroring.
-func bindCustomParams(params, args []string) (map[string]string, error) {
-	var required []string
-	for _, p := range params {
-		if !strings.HasSuffix(p, "?") {
-			required = append(required, p)
-		}
+// bindCustomParams is a thin convenience wrapper around
+// dispatch.BindPositional for callers (and tests) that still think in
+// terms of CustomCommandDef.Params' "name"/"name?" string convention
+// instead of []dispatch.Param directly.
+func bindCustomParams(paramNames, args []string) (map[string]string, error) {
+	params := make([]dispatch.Param, len(paramNames))
+	for i, p := range paramNames {
+		params[i] = dispatch.Param{Name: strings.TrimSuffix(p, "?"), Optional: strings.HasSuffix(p, "?")}
 	}
-
-	values := make(map[string]string, len(params))
-	for i, raw := range params {
-		name := strings.TrimSuffix(raw, "?")
-		optional := strings.HasSuffix(raw, "?")
-		last := i == len(params)-1
-
-		switch {
-		case i >= len(args):
-			if !optional {
-				return nil, fmt.Errorf("нужно параметров: %d (%s), дано: %d", len(required), strings.Join(required, ", "), len(args))
-			}
-			values[name] = ""
-		case last:
-			values[name] = strings.Join(args[i:], " ")
-		default:
-			values[name] = args[i]
-		}
-	}
-	return values, nil
+	return dispatch.BindPositional(params, args)
 }
 
 var (

@@ -7,13 +7,20 @@
 // answering (see internal/app.App.Execute).
 //
 // Two ways to send a command:
-//   - POST /command — one endpoint, a "/name ..." line or a
-//     {"text": "..."} convenience form (see commandRequest).
+//   - POST /command — the simple TTS/voice-command convenience form:
+//     {"text": "...", "station": "...", "as_command": false}.
 //   - POST /commands/{name} — one auto-registered URL per dispatcher
-//     command (GET /commands lists them all); config-driven commands
-//     (config.json.default, --config/commands.json) take their declared
-//     param names directly as JSON fields instead of a line to parse —
-//     see handleCommandByName's doc comment for the exact shape.
+//     command (GET /commands lists them all, with each command's exact
+//     JSON field names/types) — built-ins (say, volume, scenario, ...)
+//     and config-driven commands (config.json.default,
+//     --config/commands.json) alike take their declared param names
+//     directly as JSON fields — see handleCommandByName's doc comment
+//     for the exact shape.
+//
+// Neither endpoint builds or parses a "/name ..." slash-line — that
+// tokenizing stays a REPL-only concern (see internal/dispatch's Execute
+// vs CallNamed). Same story for MCP: every tool in mcp.go takes its own
+// named, typed parameters instead of a single line-based escape hatch.
 //
 // Two auth modes:
 //   - "Bring your own token" (default): a request carrying an
@@ -69,13 +76,13 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
+	"github.com/denizsincar29/yastation/internal/dispatch"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
@@ -174,7 +181,7 @@ func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("POST /command", handleCommand(defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess))
 	mux.HandleFunc("GET /commands", handleCommandsList(defaultsCfg, customCfg))
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(defaultsCfg, customCfg, defaultApp, tokenClients, loadAccess))
 	mux.HandleFunc("GET /schedules", handleSchedules(defaultApp))
 	mux.HandleFunc("GET /stations", handleStations(tokenClients, loadAccess))
 	mux.Handle("/mcp", mcpRoute(defaultClient, tokenClients, defaultsCfg, customCfg, loadAccess))
@@ -353,21 +360,27 @@ func withLogging(next http.Handler) http.Handler {
 
 // --- handlers -----------------------------------------------------------
 
+// commandRequest is POST /command's body — the simple TTS/voice-command
+// convenience form. For anything else (timers, scenarios, volume, your
+// own commands.json commands, ...), use POST /commands/{name} instead
+// (see handleCommandByName) — one URL per command with its own named
+// JSON fields, generated from the dispatcher itself (GET /commands).
+//
+// There is deliberately no "line" field here anymore: building a
+// "/name ..." string by hand and sending it through the REPL's
+// slash-tokenizer was the old shape of this endpoint, and it's the one
+// thing every other endpoint in this file (and every MCP tool in mcp.go)
+// was reworked specifically to avoid — slash-line parsing is a REPL-only
+// concern now (see internal/dispatch.Dispatcher.CallNamed).
 type commandRequest struct {
-	// Line is a full command line, e.g. "/say привет" or just free text
-	// to be spoken. Takes priority over Text/Station if both are set.
-	Line string `json:"line"`
-
-	// Text + Station are a convenience form for the common case: send
+	// Text + Station are the common case: send
 	// {"text": "привет", "station": "Кухня"} and it's spoken as-is.
 	// Station is optional; omitted means the default speaker. Station
-	// can also be given as the X-Station header instead of in the body —
-	// useful when Line is used and already has its own station=... arg
-	// baked in isn't convenient.
+	// can also be given as the X-Station header instead of in the body.
 	Text    string `json:"text"`
 	Station string `json:"station"`
 	// AsCommand sends Text as a voice command (/cmd) instead of TTS
-	// (/say) when using the Text/Station convenience form.
+	// (/say).
 	AsCommand bool `json:"as_command"`
 }
 
@@ -387,26 +400,22 @@ func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaults
 		if station := r.Header.Get("X-Station"); station != "" && req.Station == "" {
 			req.Station = station
 		}
-
-		line := req.Line
-		if line == "" {
-			if req.Text == "" {
-				writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужно поле line или text"})
-				return
-			}
-			stationArg := ""
-			if req.Station != "" {
-				stationArg = "station=" + req.Station + " "
-			}
-			if req.AsCommand {
-				line = "/cmd " + stationArg + req.Text
-			} else {
-				line = "/say " + stationArg + req.Text
-			}
+		if req.Text == "" {
+			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужно поле text"})
+			return
 		}
 
+		name := "say"
+		if req.AsCommand {
+			name = "cmd"
+		}
+		values := map[string]string{"text": req.Text}
+
 		runOnAccount(w, r, defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess,
-			func(ctx context.Context, a *app.App) (string, error) { return a.Execute(ctx, line) })
+			func(ctx context.Context, a *app.App) (string, error) {
+				out, _, err := a.ExecuteNamed(ctx, name, req.Station, values)
+				return out, err
+			})
 	}
 }
 
@@ -463,33 +472,40 @@ func statusForTokenError(err error) int {
 	return http.StatusUnauthorized
 }
 
-// handleCommandByName is the auto-registered per-command endpoint:
-// POST /commands/{name} — one URL per dispatcher command (built-ins like
-// "say"/"volume" and every command loaded from config.json/commands.json
-// alike, see Dispatcher.Names()), instead of building a "/name ..." line
-// by hand against the generic /command endpoint.
+// handleCommandByName is the primary way to run a command over HTTP:
+// POST /commands/{name}, one auto-registered URL per dispatcher command
+// (GET /commands lists them all with their exact field names/types) —
+// built-ins (say, volume, scenario, ...) and everything loaded from
+// config.json/commands.json alike, all through the same mechanism (see
+// internal/dispatch.Dispatcher.Spec/CallNamed). No "/name ..." line is
+// ever built or parsed on this path — the body's JSON fields are handed
+// straight through to the command's bound handler by name.
 //
-// For commands with a declared param list (anything from config.json or
-// a custom commands.json — see internal/app.CustomCommandDef), the body
-// takes those exact param names as JSON fields:
-//
+//	POST /commands/say    {"text": "привет", "station": "Кухня"}
 //	POST /commands/timer  {"minutes": "10", "label": "проверить духовку"}
-//
-// Built-in Go-coded commands (say, cmd, notify, ...) never had a
-// declared param list — they parse their own free-form args — so they
-// fall back to a generic positional form instead:
-//
-//	POST /commands/say  {"args": ["привет"]}
+//	POST /commands/scenarios   {}
 //
 // station works the same way as /command: a top-level "station" field in
-// the body, or the X-Station header.
-func handleCommandByName(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig, loadAccess func() *access.List) http.HandlerFunc {
-	paramNames := paramNamesByCommand(defaultsCfg, customCfg)
+// the body, or the X-Station header — only sent through at all if the
+// command's spec says it takes one (see dispatch.CommandSpec.TakesStation).
+func handleCommandByName(defaultsCfg, customCfg *app.CustomCommandConfig, defaultApp *app.App, tokenClients *tokenClientCache, loadAccess func() *access.List) http.HandlerFunc {
+	// A throwaway App with a nil Client only to read off the dispatcher's
+	// registered command specs — safe because Spec/Specs just walk the
+	// handler table, they never call a handler (the only thing that
+	// would ever touch Client). Specs are identical no matter which
+	// account eventually runs the command, so building this once at
+	// startup instead of per-request is fine.
+	dispatcher := buildApp(nil, defaultsCfg, customCfg).Dispatcher
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
 			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужно имя команды в пути: /commands/<name>"})
+			return
+		}
+		spec, ok := dispatcher.Spec(name)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, commandResponse{Error: fmt.Sprintf("неизвестная команда: %s (список — GET /commands)", name)})
 			return
 		}
 
@@ -501,109 +517,96 @@ func handleCommandByName(defaultApp *app.App, tokenClients *tokenClientCache, de
 			}
 		}
 
-		station := ""
-		if raw, ok := body["station"]; ok {
-			if err := json.Unmarshal(raw, &station); err != nil {
-				writeJSON(w, http.StatusBadRequest, commandResponse{Error: `поле "station" должно быть строкой`})
-				return
-			}
+		station, values, err := valuesFromBody(spec, body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, commandResponse{Error: err.Error()})
+			return
 		}
 		if h := r.Header.Get("X-Station"); h != "" && station == "" {
 			station = h
 		}
 
-		var argv []string
-		if params, ok := paramNames[name]; ok {
-			args, missing := argsFromNamedParams(params, body)
-			if missing != "" {
-				writeJSON(w, http.StatusBadRequest, commandResponse{Error: fmt.Sprintf("нужно поле %q", missing)})
-				return
-			}
-			argv = args
-		} else if raw, ok := body["args"]; ok {
-			if err := json.Unmarshal(raw, &argv); err != nil {
-				writeJSON(w, http.StatusBadRequest, commandResponse{Error: `поле "args" должно быть массивом строк`})
-				return
-			}
-		}
-		if station != "" {
-			argv = append([]string{"station=" + station}, argv...)
-		}
-
 		runOnAccount(w, r, defaultApp, tokenClients, defaultsCfg, customCfg, loadAccess,
-			func(ctx context.Context, a *app.App) (string, error) { return a.ExecuteArgs(ctx, name, argv) })
+			func(ctx context.Context, a *app.App) (string, error) {
+				out, ok, err := a.ExecuteNamed(ctx, name, station, values)
+				if !ok && err == nil {
+					err = fmt.Errorf("неизвестная команда: %s", name)
+				}
+				return out, err
+			})
 	}
 }
 
-// paramNamesByCommand indexes config-driven commands (config.json.default
-// plus any --config/YASTATION_COMMANDS_FILE commands.json) by name and
-// alias, to their declared Params (a "?" suffix marks an optional
-// trailing param, same as internal/app.CustomCommandDef.Params) — this is
-// what lets /commands/{name} accept named JSON fields instead of a bare
-// "args" array for these commands specifically. Built-in Go-coded
-// commands never declared a param list and simply aren't in this map.
-func paramNamesByCommand(cfgs ...*app.CustomCommandConfig) map[string][]string {
-	out := map[string][]string{}
-	for _, cfg := range cfgs {
-		if cfg == nil {
-			continue
-		}
-		for _, def := range cfg.Commands {
-			for _, n := range append([]string{def.Name}, def.Aliases...) {
-				out[n] = def.Params
-			}
-		}
-	}
-	return out
-}
-
-// argsFromNamedParams pulls string values out of body by the declared
-// param names, in order — the same optional-trailing-param rule as
-// internal/app.bindCustomParams: a "?"-suffixed name may be absent from
-// body, and comes out as "". Returns the name of the first missing
-// required field as missing, or "" if every required field was present.
-func argsFromNamedParams(params []string, body map[string]json.RawMessage) (argv []string, missing string) {
-	for _, p := range params {
-		name := strings.TrimSuffix(p, "?")
-		optional := strings.HasSuffix(p, "?")
+// valuesFromBody extracts station (if spec.TakesStation) and every
+// declared param from a decoded-but-not-yet-typed JSON object body — the
+// shared shape both POST /commands/{name} JSON bodies (see
+// handleCommandByName) and MCP tool call arguments (see mcp.go's
+// addSpecTool) decode into on their way to ExecuteNamed. A JSON value
+// that isn't a plain string (e.g. a bare number) falls back to its
+// literal JSON text rather than rejecting the request. Returns an error
+// naming the first missing required field.
+func valuesFromBody(spec dispatch.CommandSpec, body map[string]json.RawMessage) (station string, values map[string]string, err error) {
+	extract := func(name string) (string, bool) {
 		raw, present := body[name]
 		if !present {
-			if !optional {
-				return nil, name
-			}
-			argv = append(argv, "")
-			continue
+			return "", false
 		}
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
-			// Not a JSON string (e.g. a bare number) — fall back to its
-			// literal JSON text rather than rejecting the request.
 			s = strings.Trim(string(raw), `"`)
 		}
-		argv = append(argv, s)
+		return s, true
 	}
-	return argv, ""
+
+	if spec.TakesStation {
+		station, _ = extract("station")
+	}
+
+	values = make(map[string]string, len(spec.Params))
+	for _, p := range spec.Params {
+		v, present := extract(p.Name)
+		if !present {
+			if !p.Optional {
+				return "", nil, fmt.Errorf("нужно поле %q", p.Name)
+			}
+			values[p.Name] = ""
+			continue
+		}
+		values[p.Name] = v
+	}
+	return station, values, nil
 }
 
-// handleCommandsList answers GET /commands with every auto-registered
-// per-command endpoint name, plus (for config-driven commands) the field
-// names its POST /commands/{name} body accepts.
+// handleCommandsList answers GET /commands with every command's exact
+// POST /commands/{name} body shape: its field names, whether each is
+// optional, and whether the command takes a "station" field at all —
+// generated straight from the dispatcher, so it can never drift out of
+// sync with what handleCommandByName actually accepts.
 func handleCommandsList(defaultsCfg, customCfg *app.CustomCommandConfig) http.HandlerFunc {
-	// A throwaway App with a nil Client only to read off its registered
-	// command names — safe because Names() just walks the handler table,
-	// it never calls a handler (which is the only thing that would ever
-	// touch Client).
-	names := buildApp(nil, defaultsCfg, customCfg).Dispatcher.Names()
-	sort.Strings(names)
-	paramNames := paramNamesByCommand(defaultsCfg, customCfg)
+	specs := buildApp(nil, defaultsCfg, customCfg).Dispatcher.Specs()
 
-	type endpointJSON struct {
-		Name   string   `json:"name"`
-		Params []string `json:"params,omitempty"`
+	type paramJSON struct {
+		Name     string `json:"name"`
+		Kind     string `json:"kind"`
+		Optional bool   `json:"optional,omitempty"`
 	}
-	endpoints := make([]endpointJSON, 0, len(names))
-	for _, n := range names {
-		endpoints = append(endpoints, endpointJSON{Name: n, Params: paramNames[n]})
+	type endpointJSON struct {
+		Name         string      `json:"name"`
+		Category     string      `json:"category,omitempty"`
+		Help         string      `json:"help,omitempty"`
+		TakesStation bool        `json:"takes_station"`
+		Params       []paramJSON `json:"params,omitempty"`
+	}
+	endpoints := make([]endpointJSON, 0, len(specs))
+	for _, spec := range specs {
+		params := make([]paramJSON, len(spec.Params))
+		for i, p := range spec.Params {
+			params[i] = paramJSON{Name: p.Name, Kind: p.Kind, Optional: p.Optional}
+		}
+		endpoints = append(endpoints, endpointJSON{
+			Name: spec.Name, Category: spec.Category, Help: spec.Help,
+			TakesStation: spec.TakesStation, Params: params,
+		})
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {

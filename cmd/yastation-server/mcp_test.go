@@ -15,11 +15,11 @@ import (
 
 // mcpFakeClient is a *quasar.Client with a couple of speakers, good
 // enough for exercising the MCP layer without touching the real Yandex
-// API. alice_say/alice_ask/alice_command still end up calling
-// quasar.Client's real HTTP methods (Say/Command/...), which would fail
-// against a fake Session — these tests stick to tool discovery
-// (alice_help/alice_stations) and the auth gate, which don't need a
-// live station.
+// API. Most alice_* tools (alice_say, alice_cmd, ...) still end up
+// calling quasar.Client's real HTTP methods (Say/Command/...), which
+// would fail against a fake Session — these tests stick to tool
+// discovery (alice_help/alice_stations) and the auth gate, which don't
+// need a live station.
 func mcpFakeClient() *quasar.Client {
 	return &quasar.Client{
 		Speakers: []quasar.Device{
@@ -139,7 +139,8 @@ func TestMCPEndToEnd(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	want := map[string]bool{
-		"alice_say": false, "alice_ask": false, "alice_command": false,
+		"alice_say": false, "alice_cmd": false, "alice_notify": false,
+		"alice_volume": false, "alice_scenario": false,
 		"alice_help": false, "alice_stations": false,
 	}
 	for _, tool := range toolsResult.Tools {

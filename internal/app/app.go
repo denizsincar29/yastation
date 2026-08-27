@@ -136,6 +136,25 @@ func (a *App) ExecuteArgs(ctx context.Context, name string, args []string) (stri
 	return out, err
 }
 
+// ExecuteNamed runs the named command with already-named values (station
+// separate, everything else in values by dispatch.Param.Name), through
+// the same single-worker queue as Execute/ExecuteArgs. This is what
+// cmd/yastation-server's POST /commands/{name} and MCP tool handlers
+// call — no slash-line is built or parsed anywhere on this path; see
+// internal/dispatch.CallNamed. ok is false if name has no bound handler
+// (either unregistered, or a REPL-only command with no named shape).
+func (a *App) ExecuteNamed(ctx context.Context, name, station string, values map[string]string) (out string, ok bool, err error) {
+	err = a.Queue.EnqueueWait(ctx, queue.Job{
+		Label: "/" + name,
+		Run: func() error {
+			var runErr error
+			out, ok, runErr = a.Dispatcher.CallNamed(ctx, name, station, values)
+			return runErr
+		},
+	})
+	return out, ok, err
+}
+
 // Close stops the queue, waiting for any in-flight job to finish.
 func (a *App) Close() {
 	a.Queue.Close()
@@ -274,58 +293,89 @@ func (a *App) registerCommands() {
 		return speak(a.Client, "", text)
 	}
 
-	d.HandleCat("Основное",
+	d.HandleBoundCat("Основное",
 		"Сказать текст через станцию (TTS). ((текст)) — шёпотом отдельной репликой (слить с обычной речью в одну нельзя — целиком строку шёпотом: ~текст, ;текст или /whisper); [запрос] или №запрос№ — вставить встроенный звук Алисы прямо в речь (№ вместо [ ] удобнее на русской раскладке): /say привет ((это по секрету)) №гонг№",
-		func(ctx context.Context, args []string) (string, error) {
-			station, rest := station(args)
-			text := dispatch.Rest(rest)
+		true,
+		[]dispatch.Param{{Name: "text", Kind: "string", Help: "Текст для озвучивания"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			text := v["text"]
 			if text == "" {
 				return "", fmt.Errorf("нужен текст: /say привет")
 			}
 			return speak(a.Client, station, text)
 		}, "say", "s", "tts")
 
-	d.HandleCat("Основное", "Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается", func(ctx context.Context, args []string) (string, error) {
-		station, rest := station(args)
-		text := dispatch.Rest(rest)
-		if text == "" {
-			return "", fmt.Errorf("нужен текст: /cmd включи радио")
+	d.HandleBoundCat("Основное", "Голосовая команда/вопрос Алисе. Ответ прозвучит из колонки, в консоль не возвращается",
+		true,
+		[]dispatch.Param{{Name: "text", Kind: "string", Help: "Текст голосовой команды/вопроса"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			text := v["text"]
+			if text == "" {
+				return "", fmt.Errorf("нужен текст: /cmd включи радио")
+			}
+			if err := a.Client.Command(station, text); err != nil {
+				return "", err
+			}
+			return "[команда отправлена] " + text, nil
+		}, "cmd", "c", "ask")
+
+	// notify keeps its own legacy REPL handler (HandleNamed, not
+	// HandleBoundCat) because its documented slash syntax puts volume=
+	// as a keyword anywhere in the args rather than as the first
+	// positional token (see README.md) — a plain positional bind would
+	// silently change that syntax. The bound handler below (what HTTP
+	// JSON bodies and the alice_notify MCP tool call) is unaffected:
+	// there volume is just its own named field either way.
+	notifyBound := func(ctx context.Context, station string, v map[string]string) (string, error) {
+		volume := 4.0
+		if raw := v["volume"]; raw != "" {
+			parsed, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return "", fmt.Errorf("volume не число: %q", raw)
+			}
+			volume = parsed
 		}
-		if err := a.Client.Command(station, text); err != nil {
+		text := v["text"]
+		if text == "" {
+			return "", fmt.Errorf("нужен текст: /notify задача выполнена")
+		}
+		if err := a.Client.Notify(station, text, volume); err != nil {
 			return "", err
 		}
-		return "[команда отправлена] " + text, nil
-	}, "cmd", "c", "ask")
-
-	d.HandleCat("Основное",
-		"Уведомление: громкость (по умолчанию 0.4) + фраза. volume=0.3 в любом месте аргументов, volume=-1 пропустить громкость",
+		return fmt.Sprintf("[уведомление, громкость %v] %s", volume, text), nil
+	}
+	d.HandleNamed("Основное",
+		"Уведомление: громкость (по умолчанию 4 из 0..10) + фраза. volume=3 в любом месте аргументов, volume=-1 пропустить громкость",
+		true,
+		[]dispatch.Param{
+			{Name: "volume", Kind: "number", Optional: true, Help: "Громкость 0..10, по умолчанию 4; -1 — пропустить громкость"},
+			{Name: "text", Kind: "string", Help: "Текст уведомления"},
+		},
 		func(ctx context.Context, args []string) (string, error) {
 			station, rest := station(args)
 			volume, rest := notifyVolume(rest)
 			text := dispatch.Rest(rest)
-			if text == "" {
-				return "", fmt.Errorf("нужен текст: /notify задача выполнена")
+			values := map[string]string{"text": text}
+			if volume != 4 {
+				values["volume"] = strconv.FormatFloat(volume, 'g', -1, 64)
 			}
-			if err := a.Client.Notify(station, text, volume); err != nil {
+			return notifyBound(ctx, station, values)
+		},
+		notifyBound, "notify", "n")
+
+	d.HandleBoundCat("Плеер", "Громкость 0..10, например /volume 3",
+		true,
+		[]dispatch.Param{{Name: "level", Kind: "number", Help: "Громкость, число от 0 до 10"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			level, err := strconv.ParseFloat(v["level"], 64)
+			if err != nil {
+				return "", fmt.Errorf("не число: %q", v["level"])
+			}
+			if err := a.Client.Volume(station, level); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("[уведомление, громкость %v] %s", volume, text), nil
-		}, "notify", "n")
-
-	d.HandleCat("Плеер", "Громкость 0..10, например /volume 3", func(ctx context.Context, args []string) (string, error) {
-		station, rest := station(args)
-		if len(rest) != 1 {
-			return "", fmt.Errorf("нужно ровно одно число: /volume 3")
-		}
-		level, err := strconv.ParseFloat(rest[0], 64)
-		if err != nil {
-			return "", fmt.Errorf("не число: %q", rest[0])
-		}
-		if err := a.Client.Volume(station, level); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[громкость] %v", level), nil
-	}, "volume", "vol")
+			return fmt.Sprintf("[громкость] %v", level), nil
+		}, "volume", "vol")
 
 	// play/pause/stop/next/prev/weather/news/timer/alarm/reminder used to
 	// live here as near-identical little wrappers around Command(). They
@@ -333,84 +383,101 @@ func (a *App) registerCommands() {
 	// registered by the caller (see RegisterCustomCommands) right after
 	// New() returns — same mechanism as a user's own --config commands.
 
-	d.HandleCat("Сценарии", "Список твоих сценариев умного дома", func(ctx context.Context, args []string) (string, error) {
-		names := a.Client.ListScenarios()
-		if len(names) == 0 {
-			return "сценариев не найдено", nil
-		}
-		return "- " + strings.Join(names, "\n- "), nil
-	}, "scenarios")
+	d.HandleBoundCat("Сценарии", "Список твоих сценариев умного дома", false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			names := a.Client.ListScenarios()
+			if len(names) == 0 {
+				return "сценариев не найдено", nil
+			}
+			return "- " + strings.Join(names, "\n- "), nil
+		}, "scenarios")
 
-	d.HandleCat("Сценарии", "Запустить сценарий по имени: /scenario Вечер", func(ctx context.Context, args []string) (string, error) {
-		name := dispatch.Rest(args)
-		if name == "" {
-			return "", fmt.Errorf("нужно имя сценария")
-		}
-		if err := a.Client.RunScenario(name); err != nil {
-			return "", err
-		}
-		return "[сценарий запущен] " + name, nil
-	}, "scenario", "run")
+	d.HandleBoundCat("Сценарии", "Запустить сценарий по имени: /scenario Вечер", false,
+		[]dispatch.Param{{Name: "name", Kind: "string", Help: "Имя сценария"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			name := v["name"]
+			if name == "" {
+				return "", fmt.Errorf("нужно имя сценария")
+			}
+			if err := a.Client.RunScenario(name); err != nil {
+				return "", err
+			}
+			return "[сценарий запущен] " + name, nil
+		}, "scenario", "run")
 
-	d.HandleCat("Диагностика", "Диагностика подключения", func(ctx context.Context, args []string) (string, error) {
-		return a.Client.Diagnostics()
-	}, "stations", "diag", "diagnostics")
+	d.HandleBoundCat("Диагностика", "Диагностика подключения", false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			return a.Client.Diagnostics()
+		}, "stations", "diag", "diagnostics")
 
-	d.HandleCat("Планировщик", "Периодическая команда: /every 5m /say время отчёта", func(ctx context.Context, args []string) (string, error) {
-		if len(args) < 2 {
-			return "", fmt.Errorf("нужно: /every <30s|5m|2h> <команда>")
-		}
-		interval := args[0]
-		commandLine := dispatch.Rest(args[1:])
-		task, err := a.Scheduler.Schedule("every "+interval, commandLine)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
-	}, "every")
+	d.HandleBoundCat("Планировщик", "Периодическая команда: /every 5m /say время отчёта", false,
+		[]dispatch.Param{
+			{Name: "interval", Kind: "string", Help: "Период, например 30s, 5m, 2h"},
+			{Name: "command_line", Kind: "string", Help: "Команда для запуска, в синтаксисе REPL, например \"/say время отчёта\""},
+		},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			commandLine := v["command_line"]
+			if v["interval"] == "" || commandLine == "" {
+				return "", fmt.Errorf("нужно: /every <30s|5m|2h> <команда>")
+			}
+			task, err := a.Scheduler.Schedule("every "+v["interval"], commandLine)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
+		}, "every")
 
-	d.HandleCat("Планировщик", "Разовая команда в HH:MM: /at 7:30 /say доброе утро", func(ctx context.Context, args []string) (string, error) {
-		if len(args) < 2 {
-			return "", fmt.Errorf("нужно: /at <ЧЧ:ММ> <команда>")
-		}
-		at := args[0]
-		commandLine := dispatch.Rest(args[1:])
-		task, err := a.Scheduler.Schedule("at "+at, commandLine)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
-	}, "at")
+	d.HandleBoundCat("Планировщик", "Разовая команда в HH:MM: /at 7:30 /say доброе утро", false,
+		[]dispatch.Param{
+			{Name: "time", Kind: "string", Help: "Время в формате ЧЧ:ММ"},
+			{Name: "command_line", Kind: "string", Help: "Команда для запуска, в синтаксисе REPL, например \"/say доброе утро\""},
+		},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			commandLine := v["command_line"]
+			if v["time"] == "" || commandLine == "" {
+				return "", fmt.Errorf("нужно: /at <ЧЧ:ММ> <команда>")
+			}
+			task, err := a.Scheduler.Schedule("at "+v["time"], commandLine)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("[запланировано #%d] %s -> %s", task.ID, task.Spec, task.CommandLine), nil
+		}, "at")
 
-	d.HandleCat("Планировщик", "Список запланированных команд", func(ctx context.Context, args []string) (string, error) {
-		tasks := a.Scheduler.List()
-		if len(tasks) == 0 {
-			return "активных задач нет", nil
-		}
-		var lines []string
-		for _, t := range tasks {
-			lines = append(lines, fmt.Sprintf("#%d %s -> %s", t.ID, t.Spec, t.CommandLine))
-		}
-		return strings.Join(lines, "\n"), nil
-	}, "schedules", "jobs")
+	d.HandleBoundCat("Планировщик", "Список запланированных команд", false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			tasks := a.Scheduler.List()
+			if len(tasks) == 0 {
+				return "активных задач нет", nil
+			}
+			var lines []string
+			for _, t := range tasks {
+				lines = append(lines, fmt.Sprintf("#%d %s -> %s", t.ID, t.Spec, t.CommandLine))
+			}
+			return strings.Join(lines, "\n"), nil
+		}, "schedules", "jobs")
 
-	d.HandleCat("Планировщик", "Отменить все запланированные команды", func(ctx context.Context, args []string) (string, error) {
-		a.Scheduler.CancelAll()
-		return "[все запланированные команды отменены]", nil
-	}, "unschedule_all", "cancel_all")
+	d.HandleBoundCat("Планировщик", "Отменить все запланированные команды", false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			a.Scheduler.CancelAll()
+			return "[все запланированные команды отменены]", nil
+		}, "unschedule_all", "cancel_all")
 
-	d.HandleCat("Планировщик", "Выполнить команды построчно из файла: /execute examples/morning.txt", func(ctx context.Context, args []string) (string, error) {
-		if len(args) != 1 {
-			return "", fmt.Errorf("нужен ровно один путь к файлу")
-		}
-		return a.executeScript(ctx, args[0])
-	}, "execute")
+	d.HandleBoundCat("Планировщик", "Выполнить команды построчно из файла: /execute examples/morning.txt", false,
+		[]dispatch.Param{{Name: "path", Kind: "string", Help: "Путь к файлу со списком команд"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			if v["path"] == "" {
+				return "", fmt.Errorf("нужен ровно один путь к файлу")
+			}
+			return a.executeScript(ctx, v["path"])
+		}, "execute")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Скажи фразу шёпотом — через флаг whisper capability tts, подтверждённый на реальном устройстве, не фраза-угадайка. Можно вставить звук через [запрос]: /whisper текст",
-		func(ctx context.Context, args []string) (string, error) {
-			station, rest := station(args)
-			text := dispatch.Rest(rest)
+		true,
+		[]dispatch.Param{{Name: "text", Kind: "string", Help: "Текст для шёпота"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			text := v["text"]
 			if text == "" {
 				return "", fmt.Errorf("нужен текст: /whisper тише едешь дальше будешь")
 			}
@@ -424,14 +491,15 @@ func (a *App) registerCommands() {
 			return "[шёпотом] " + text, nil
 		}, "whisper", "шёпот")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Звук из библиотеки Алисы по (части) имени, RU или EN — если совпадение одно, id подставится сам: /sound бензопила, /sound explosion",
-		func(ctx context.Context, args []string) (string, error) {
-			station, rest := station(args)
-			if len(rest) == 0 {
+		true,
+		[]dispatch.Param{{Name: "query", Kind: "string", Help: "Часть имени звука, RU или EN"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			query := v["query"]
+			if query == "" {
 				return "", fmt.Errorf("нужно имя звука: /sound бензопила")
 			}
-			query := dispatch.Rest(rest)
 			id, candidates, ok := sounds.FindEffect(query)
 			if !ok {
 				return "", fmt.Errorf("%s", sounds.FormatCandidates(query, candidates))
@@ -442,33 +510,37 @@ func (a *App) registerCommands() {
 			return fmt.Sprintf("[звук] %s (запрос: %s)", id, query), nil
 		}, "sound")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Список всех доступных звуков (для /sound), по категориям; можно сузить подстрокой RU/EN: /sounds, /sounds смех",
-		func(ctx context.Context, args []string) (string, error) {
-			filter := strings.ToLower(strings.TrimSpace(dispatch.Rest(args)))
+		false,
+		[]dispatch.Param{{Name: "filter", Kind: "string", Optional: true, Help: "Подстрока для фильтра по id/имени/категории (RU/EN)"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			filter := strings.ToLower(strings.TrimSpace(v["filter"]))
 			return formatSoundList(filter), nil
 		}, "sounds", "soundlist")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Только список категорий звуков (без раскрытия содержимого) — дальше сузить: /sounds <категория>",
-		func(ctx context.Context, args []string) (string, error) {
+		false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
 			return formatSoundCategories(), nil
 		}, "sndcat", "soundcategories")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Жёсткий стоп всего (не то же самое, что /stop): /stopall [станция]",
-		func(ctx context.Context, args []string) (string, error) {
-			st, _ := station(args)
-			if err := a.Client.StopEverything(st); err != nil {
+		true, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			if err := a.Client.StopEverything(station); err != nil {
 				return "", err
 			}
 			return "[стоп всего]", nil
 		}, "stopall")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Цветовая сцена подсветки колонки — без аргумента покажет список доступных сцен на этой станции (текстом, для неё не нужны глаза): /scene, /scene ночь",
-		func(ctx context.Context, args []string) (string, error) {
-			station, rest := station(args)
+		true,
+		[]dispatch.Param{{Name: "name", Kind: "string", Optional: true, Help: "Часть имени/id сцены; без значения — список доступных сцен"}},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
 			caps, err := a.Client.Capabilities(station)
 			if err != nil {
 				return "", err
@@ -477,7 +549,7 @@ func (a *App) registerCommands() {
 			if !hasScenes {
 				return "", fmt.Errorf("на этой станции нет цветовых сцен (нет capability color_setting/scenes)")
 			}
-			if len(rest) == 0 {
+			if v["name"] == "" {
 				if len(options) == 0 {
 					return "цветовых сцен на этой станции нет", nil
 				}
@@ -488,7 +560,7 @@ func (a *App) registerCommands() {
 				return "Доступные сцены:\n  " + strings.Join(lines, "\n  "), nil
 			}
 
-			query := strings.ToLower(dispatch.Rest(rest))
+			query := strings.ToLower(v["name"])
 			var id, matchedName string
 			matches := 0
 			for _, o := range options {
@@ -514,40 +586,41 @@ func (a *App) registerCommands() {
 			return fmt.Sprintf("[сцена] %s (%s) — проверить можно через /refresh и /scene", id, matchedName), nil
 		}, "scene", "light")
 
-	d.HandleCat("Диагностика",
+	d.HandleBoundCat("Диагностика",
 		"Перечитать список станций/сценариев/capabilities с Яндекса — например, чтобы прочитать текстом, применилась ли смена сцены/звука, не дожидаясь визуальной проверки: /refresh",
-		func(ctx context.Context, args []string) (string, error) {
+		false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
 			if err := a.Client.Refresh(); err != nil {
 				return "", err
 			}
 			return "[обновлено]", nil
 		}, "refresh")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Погода через структурную capability вместо фразы \"какая погода\" — подтверждено на реальном дампе, сработает ли запуск не проверено отдельно: /weather [станция]",
-		func(ctx context.Context, args []string) (string, error) {
-			st, _ := station(args)
-			if err := a.Client.Weather(st); err != nil {
+		true, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			if err := a.Client.Weather(station); err != nil {
 				return "", err
 			}
 			return "[погода]", nil
 		}, "weather")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Запустить музыку через структурную capability music_play (не то же самое, что /play — тот просто возобновляет паузу): /music [станция]",
-		func(ctx context.Context, args []string) (string, error) {
-			st, _ := station(args)
-			if err := a.Client.PlayMusic(st); err != nil {
+		true, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			if err := a.Client.PlayMusic(station); err != nil {
 				return "", err
 			}
 			return "[музыка]", nil
 		}, "music")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Сырые capabilities станции как есть от Яндекса — для разведки протокола: /capabilities [станция]",
-		func(ctx context.Context, args []string) (string, error) {
-			st, _ := station(args)
-			caps, err := a.Client.Capabilities(st)
+		true, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			caps, err := a.Client.Capabilities(station)
 			if err != nil {
 				return "", err
 			}
@@ -558,28 +631,33 @@ func (a *App) registerCommands() {
 			return string(b), nil
 		}, "capabilities", "caps")
 
-	d.HandleCat("Экспериментально",
+	d.HandleBoundCat("Экспериментально",
 		"Сырой вызов capability в обход всех типизированных команд (см. /capabilities для имён): /raw тип instance значение",
-		func(ctx context.Context, args []string) (string, error) {
-			st, rest := station(args)
-			if len(rest) < 3 {
+		true,
+		[]dispatch.Param{
+			{Name: "cap_type", Kind: "string", Help: "Тип capability, например devices.capabilities.quasar.server_action"},
+			{Name: "instance", Kind: "string", Help: "instance, например tts"},
+			{Name: "value", Kind: "string", Help: "Значение — JSON или обычная строка, например {\"text\":\"привет\"}"},
+		},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			capType, instance, raw := v["cap_type"], v["instance"], v["value"]
+			if capType == "" || instance == "" || raw == "" {
 				return "", fmt.Errorf("нужно: /raw <тип> <instance> <значение>, например /raw devices.capabilities.quasar tts {\"text\":\"привет\"}")
 			}
-			capType, instance := rest[0], rest[1]
-			raw := dispatch.Rest(rest[2:])
 			var value any
 			if err := json.Unmarshal([]byte(raw), &value); err != nil {
 				value = raw // не JSON — шлём как обычную строку
 			}
-			if err := a.Client.RawCapability(st, capType, instance, value); err != nil {
+			if err := a.Client.RawCapability(station, capType, instance, value); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("[raw %s/%s] отправлено: %v", capType, instance, value), nil
 		}, "raw")
 
-	d.HandleCat("Справка", "Список команд (по /команда? — справка по одной)", func(ctx context.Context, args []string) (string, error) {
-		return d.Help(), nil
-	}, "help", "h", "?")
+	d.HandleBoundCat("Справка", "Список команд (по /команда? — справка по одной)", false, nil,
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			return d.Help(), nil
+		}, "help", "h", "?")
 }
 
 // executeScript runs commands from a file line by line: blank lines and

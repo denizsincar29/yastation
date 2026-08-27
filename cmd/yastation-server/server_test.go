@@ -13,6 +13,7 @@ import (
 
 	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
+	"github.com/denizsincar29/yastation/internal/dispatch"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
@@ -403,7 +404,7 @@ func TestHandleCommandByNameConfigCommandUsesNamedParams(t *testing.T) {
 	defer a.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(testCustomCfg(), nil, a, newTokenClientCache(time.Minute), emptyAccessList))
 
 	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"minutes":"10","label":"проверить духовку","station":"Кухня"}`))
 	rec := httptest.NewRecorder()
@@ -427,7 +428,7 @@ func TestHandleCommandByNameConfigCommandOptionalParamOmitted(t *testing.T) {
 	defer a.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(testCustomCfg(), nil, a, newTokenClientCache(time.Minute), emptyAccessList))
 
 	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"minutes":"5"}`))
 	rec := httptest.NewRecorder()
@@ -447,7 +448,7 @@ func TestHandleCommandByNameConfigCommandMissingRequiredParam(t *testing.T) {
 	defer a.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), testCustomCfg(), nil, emptyAccessList))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(testCustomCfg(), nil, a, newTokenClientCache(time.Minute), emptyAccessList))
 
 	req := httptest.NewRequest(http.MethodPost, "/commands/timer", strings.NewReader(`{"label":"духовку"}`))
 	rec := httptest.NewRecorder()
@@ -458,15 +459,19 @@ func TestHandleCommandByNameConfigCommandMissingRequiredParam(t *testing.T) {
 	}
 }
 
-func TestHandleCommandByNameBuiltinUsesArgsArray(t *testing.T) {
+// TestHandleCommandByNameBuiltinUsesNamedParams checks that a built-in
+// Go-coded command (not from any commands.json) goes through the exact
+// same named-JSON-field mechanism as a config-driven one — no more
+// generic {"args": [...]} positional fallback.
+func TestHandleCommandByNameBuiltinUsesNamedParams(t *testing.T) {
 	f := &fakeStation{}
 	a := app.New(f)
 	defer a.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(nil, nil, a, newTokenClientCache(time.Minute), emptyAccessList))
 
-	req := httptest.NewRequest(http.MethodPost, "/commands/say", strings.NewReader(`{"args":["привет"],"station":"Кухня"}`))
+	req := httptest.NewRequest(http.MethodPost, "/commands/say", strings.NewReader(`{"text":"привет","station":"Кухня"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -485,13 +490,13 @@ func TestHandleCommandByNameUnknownCommand(t *testing.T) {
 	defer a.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /commands/{name}", handleCommandByName(a, newTokenClientCache(time.Minute), nil, nil, emptyAccessList))
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(nil, nil, a, newTokenClientCache(time.Minute), emptyAccessList))
 
 	req := httptest.NewRequest(http.MethodPost, "/commands/nope", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnprocessableEntity {
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
 }
@@ -506,42 +511,67 @@ func TestHandleCommandsListIncludesBuiltinsAndConfigParams(t *testing.T) {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
 	var endpoints []struct {
-		Name   string   `json:"name"`
-		Params []string `json:"params,omitempty"`
+		Name         string `json:"name"`
+		TakesStation bool   `json:"takes_station"`
+		Params       []struct {
+			Name     string `json:"name"`
+			Optional bool   `json:"optional,omitempty"`
+		} `json:"params,omitempty"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &endpoints); err != nil {
 		t.Fatal(err)
 	}
-	found := map[string][]string{}
-	for _, e := range endpoints {
-		found[e.Name] = e.Params
+	byName := map[string]int{}
+	for i, e := range endpoints {
+		byName[e.Name] = i
 	}
-	if _, ok := found["say"]; !ok {
-		t.Fatalf("expected builtin 'say' in list: %v", found)
+	sayIdx, ok := byName["say"]
+	if !ok || !endpoints[sayIdx].TakesStation || len(endpoints[sayIdx].Params) != 1 || endpoints[sayIdx].Params[0].Name != "text" {
+		t.Fatalf("expected builtin 'say' with a required 'text' param: %+v (ok=%v)", endpoints, ok)
 	}
-	params, ok := found["timer"]
-	if !ok || len(params) != 2 || params[0] != "minutes" || params[1] != "label?" {
-		t.Fatalf("expected timer params [minutes label?], got %v (ok=%v)", params, ok)
+	timerIdx, ok := byName["timer"]
+	if !ok {
+		t.Fatalf("expected config command 'timer' in list: %v", byName)
+	}
+	timerParams := endpoints[timerIdx].Params
+	if len(timerParams) != 2 || timerParams[0].Name != "minutes" || timerParams[0].Optional ||
+		timerParams[1].Name != "label" || !timerParams[1].Optional {
+		t.Fatalf("expected timer params [minutes(required) label(optional)], got %+v", timerParams)
 	}
 }
 
-func TestArgsFromNamedParamsMissingRequired(t *testing.T) {
-	_, missing := argsFromNamedParams([]string{"when", "text"}, map[string]json.RawMessage{
+func TestValuesFromBodyMissingRequired(t *testing.T) {
+	spec := dispatch.CommandSpec{Params: []dispatch.Param{{Name: "when"}, {Name: "text"}}}
+	_, _, err := valuesFromBody(spec, map[string]json.RawMessage{
 		"when": json.RawMessage(`"завтра"`),
 	})
-	if missing != "text" {
-		t.Fatalf("missing=%q", missing)
+	if err == nil {
+		t.Fatal("expected an error for the missing required 'text' field")
 	}
 }
 
-func TestArgsFromNamedParamsOptionalDefaultsEmpty(t *testing.T) {
-	argv, missing := argsFromNamedParams([]string{"minutes", "label?"}, map[string]json.RawMessage{
+func TestValuesFromBodyOptionalDefaultsEmpty(t *testing.T) {
+	spec := dispatch.CommandSpec{Params: []dispatch.Param{{Name: "minutes"}, {Name: "label", Optional: true}}}
+	_, values, err := valuesFromBody(spec, map[string]json.RawMessage{
 		"minutes": json.RawMessage(`"10"`),
 	})
-	if missing != "" {
-		t.Fatalf("missing=%q", missing)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(argv) != 2 || argv[0] != "10" || argv[1] != "" {
-		t.Fatalf("argv=%v", argv)
+	if values["minutes"] != "10" || values["label"] != "" {
+		t.Fatalf("values=%v", values)
+	}
+}
+
+func TestValuesFromBodyStation(t *testing.T) {
+	spec := dispatch.CommandSpec{TakesStation: true}
+	station, _, err := valuesFromBody(spec, map[string]json.RawMessage{
+		"station": json.RawMessage(`"Кухня"`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if station != "Кухня" {
+		t.Fatalf("station=%q", station)
 	}
 }

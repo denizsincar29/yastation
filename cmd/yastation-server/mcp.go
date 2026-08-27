@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
+	"github.com/denizsincar29/yastation/internal/dispatch"
 	"github.com/denizsincar29/yastation/internal/quasar"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -135,85 +137,37 @@ func writeMCPAuthError(w http.ResponseWriter, msg string) {
 
 // --- MCP tools --------------------------------------------------------
 
-type sayParams struct {
-	Text    string `json:"text" jsonschema:"Текст для озвучивания через колонку (TTS)"`
-	Station string `json:"station,omitempty" jsonschema:"Имя колонки; если не указано, используется станция по умолчанию (заголовок X-Station)"`
-}
-
-type askParams struct {
-	Text    string `json:"text" jsonschema:"Голосовая команда/вопрос для Алисы, например \"какая погода\" или \"включи радио на кухне\""`
-	Station string `json:"station,omitempty" jsonschema:"Имя колонки; если не указано, используется станция по умолчанию (заголовок X-Station)"`
-}
-
-type mcpCommandParams struct {
-	Line string `json:"line" jsonschema:"Полная команда так, как она вводится в REPL yastation, например \"/timer 10 варка яиц\", \"/volume 5\", \"/scenario Вечер\" или \"- какая погода\". Список команд — через alice_help"`
-}
-
 type emptyParams struct{}
 
 // buildMCPServer wires up one *mcp.Server bound to a single Yandex
-// account (client) and a default station, with every yastation
-// dispatcher command reachable either directly (alice_say/alice_ask)
-// or through the alice_command escape hatch.
+// account (client) and a default station, with every dispatcher command
+// that has a bound handler (see internal/dispatch.Dispatcher.Specs)
+// exposed as its own MCP tool with its own named, typed parameters —
+// generated straight from the dispatcher (addSpecTool), so a tool's
+// schema can never drift out of sync with what the command actually
+// accepts. There's no generic "run this line" tool anymore: same
+// reasoning as cmd/yastation-server's POST /commands/{name} (see
+// main.go's package doc comment) — slash-line parsing is a REPL-only
+// concern, never something an MCP tool call replays.
 func buildMCPServer(client *quasar.Client, defaultStation string, defaultsCfg, customCfg *app.CustomCommandConfig) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "yastation",
-		Version: "0.1.0",
+		Version: "0.2.0",
 	}, nil)
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "alice_say",
-		Description: "Сказать текст через Яндекс Станцию (TTS) — Алиса просто произносит текст вслух, без интерпретации как команды.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, p *sayParams) (*mcp.CallToolResult, any, error) {
-		if strings.TrimSpace(p.Text) == "" {
-			return nil, nil, fmt.Errorf("text не может быть пустым")
-		}
-		a := buildApp(client, defaultsCfg, customCfg)
-		defer a.Close()
-		out, err := a.ExecuteArgs(ctx, "say", stationArgv(pick(p.Station, defaultStation), p.Text))
-		if err != nil {
-			return nil, nil, err
-		}
-		return textResult(out), nil, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "alice_ask",
-		Description: "Отправить Алисе голосовую команду/вопрос — как если бы её произнесли вслух в колонку. " +
-			"ВАЖНО: протокол Яндекса не даёт способа получить текстовый ответ Алисы обратно — он прозвучит только из динамика колонки. " +
-			"Этот инструмент лишь подтверждает, что команда отправлена, он не возвращает, что именно ответила Алиса.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, p *askParams) (*mcp.CallToolResult, any, error) {
-		if strings.TrimSpace(p.Text) == "" {
-			return nil, nil, fmt.Errorf("text не может быть пустым")
-		}
-		a := buildApp(client, defaultsCfg, customCfg)
-		defer a.Close()
-		out, err := a.ExecuteArgs(ctx, "cmd", stationArgv(pick(p.Station, defaultStation), p.Text))
-		if err != nil {
-			return nil, nil, err
-		}
-		return textResult(out), nil, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "alice_command",
-		Description: "Выполнить произвольную команду yastation одной строкой — эскейп-хэтч на все команды сразу (таймеры, будильники, сценарии, громкость, плеер, свои команды из commands.json и т.д). Синтаксис и список команд — через alice_help.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, p *mcpCommandParams) (*mcp.CallToolResult, any, error) {
-		if strings.TrimSpace(p.Line) == "" {
-			return nil, nil, fmt.Errorf("line не может быть пустым")
-		}
-		a := buildApp(client, defaultsCfg, customCfg)
-		defer a.Close()
-		out, err := a.Execute(ctx, p.Line)
-		if err != nil {
-			return nil, nil, err
-		}
-		return textResult(out), nil, nil
-	})
+	// Specs are static — identical no matter which account eventually
+	// runs a command — so a throwaway App with a nil Client is enough to
+	// read them off (same trick main.go's handleCommandByName/
+	// handleCommandsList use); it never calls a handler, the only thing
+	// that would ever touch Client.
+	specs := buildApp(nil, defaultsCfg, customCfg).Dispatcher.Specs()
+	for _, spec := range specs {
+		addSpecTool(server, spec, client, defaultStation, defaultsCfg, customCfg)
+	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "alice_help",
-		Description: "Список всех доступных команд yastation с описанием и синтаксисом каждой — то же самое, что /help в REPL. Вызови перед alice_command, если не уверен в синтаксисе.",
+		Description: "Обзор всех команд yastation одним текстом, по категориям — то же самое, что /help в REPL. Обычно не нужен: каждая команда уже своим отдельным инструментом (alice_say, alice_volume, ...) со своим описанием и параметрами; загляни сюда, если нужен общий обзор сразу всего.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, p *emptyParams) (*mcp.CallToolResult, any, error) {
 		a := buildApp(client, defaultsCfg, customCfg)
 		defer a.Close()
@@ -241,15 +195,73 @@ func buildMCPServer(client *quasar.Client, defaultStation string, defaultsCfg, c
 	return server
 }
 
-// stationArgv builds the []string argv that say/cmd handlers expect:
-// an optional leading "station=Name" token (see internal/app.station)
-// followed by the whole text as a single element, so dispatch.Rest
-// reconstructs it byte-for-byte instead of collapsing whitespace.
-func stationArgv(station, text string) []string {
-	if station == "" {
-		return []string{text}
+// addSpecTool registers one MCP tool for spec — named "alice_<command>",
+// with an input schema built directly from spec.Params (every value a
+// plain JSON string, same convention internal/dispatch.BoundHandler and
+// cmd/yastation-server's POST /commands/{name} already use; a "number"
+// Kind is a description hint only, not a JSON Schema type, since the
+// value still arrives as a string either way — see dispatch.Param). The
+// handler itself is a thin shim: decode arguments, hand them straight to
+// ExecuteNamed, no slash-line anywhere in between.
+func addSpecTool(server *mcp.Server, spec dispatch.CommandSpec, client *quasar.Client, defaultStation string, defaultsCfg, customCfg *app.CustomCommandConfig) {
+	properties := map[string]any{}
+	var required []string
+	if spec.TakesStation {
+		properties["station"] = map[string]any{
+			"type":        "string",
+			"description": "Имя колонки; если не указано, используется станция по умолчанию для этого MCP-подключения.",
+		}
 	}
-	return []string{"station=" + station, text}
+	for _, p := range spec.Params {
+		desc := p.Help
+		if p.Kind == "number" {
+			if desc != "" {
+				desc += " "
+			}
+			desc += "(число, JSON-строкой)"
+		}
+		properties[p.Name] = map[string]any{"type": "string", "description": desc}
+		if !p.Optional {
+			required = append(required, p.Name)
+		}
+	}
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+
+	description := spec.Help
+	if spec.Name == "cmd" {
+		description += " ВАЖНО: протокол Яндекса не даёт способа получить текстовый ответ Алисы обратно — он прозвучит только из динамика колонки. Этот инструмент лишь подтверждает, что команда отправлена, он не возвращает, что именно ответила Алиса."
+	}
+
+	server.AddTool(&mcp.Tool{
+		Name:        "alice_" + spec.Name,
+		Description: description,
+		InputSchema: schema,
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		body := map[string]json.RawMessage{}
+		if len(req.Params.Arguments) > 0 {
+			if err := json.Unmarshal(req.Params.Arguments, &body); err != nil {
+				return errResult(fmt.Errorf("невалидные аргументы: %w", err)), nil
+			}
+		}
+		station, values, err := valuesFromBody(spec, body)
+		if err != nil {
+			return errResult(err), nil
+		}
+
+		a := buildApp(client, defaultsCfg, customCfg)
+		defer a.Close()
+		out, ok, err := a.ExecuteNamed(ctx, spec.Name, pick(station, defaultStation), values)
+		if err != nil {
+			return errResult(err), nil
+		}
+		if !ok {
+			return errResult(fmt.Errorf("команда не найдена: %s", spec.Name)), nil
+		}
+		return textResult(out), nil
+	})
 }
 
 func pick(preferred, fallback string) string {
@@ -261,4 +273,16 @@ func pick(preferred, fallback string) string {
 
 func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
+}
+
+// errResult turns err into a CallToolResult with IsError set, the shape
+// server.AddTool (the low-level API addSpecTool uses, so it can build
+// each tool's schema dynamically from a dispatch.CommandSpec) expects
+// for a failed call — the generic top-level mcp.AddTool wrapper used
+// elsewhere in this file does this same wrapping automatically for a
+// non-nil returned error, but the low-level API leaves it to the caller.
+func errResult(err error) *mcp.CallToolResult {
+	r := &mcp.CallToolResult{}
+	r.SetError(err)
+	return r
 }
