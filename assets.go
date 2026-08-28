@@ -15,3 +15,10 @@ import _ "embed"
 //
 //go:embed config.json.default
 var DefaultCommandsJSON []byte
+
+// DefaultHotkeysJSON is the raw content of hotkeys.json.default (empty
+// bindings, see that file's own comment), copied to a user-editable
+// hotkeys.json on first run (see internal/app.EnsureHotkeyFile).
+//
+//go:embed hotkeys.json.default
+var DefaultHotkeysJSON []byte

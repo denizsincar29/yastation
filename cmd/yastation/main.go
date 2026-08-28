@@ -136,6 +136,20 @@ func main() {
 		fmt.Printf("Загружено своих команд: %d (из %s)\n", len(cfg.Commands), configPath)
 	}
 
+	hotkeysPath := app.HotkeyFilePath()
+	if err := app.EnsureHotkeyFile(hotkeysPath); err != nil {
+		fmt.Fprintln(os.Stderr, "Не смог создать", hotkeysPath, ":", err)
+		os.Exit(1)
+	}
+	hotkeysCfg, err := app.LoadHotkeyConfig(hotkeysPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Не смог загрузить", hotkeysPath, ":", err)
+		os.Exit(1)
+	}
+	if len(hotkeysCfg.Bindings) > 0 {
+		fmt.Printf("Загружено горячих клавиш: %d (из %s)\n", len(hotkeysCfg.Bindings), hotkeysPath)
+	}
+
 	ctx := context.Background()
 
 	if len(commands) > 0 {
@@ -147,9 +161,12 @@ func main() {
 
 	fmt.Println("Пиши текст — он будет озвучен станцией. Команды — с /, /help — список.")
 	if noReadline {
+		if len(hotkeysCfg.Bindings) > 0 {
+			fmt.Fprintln(os.Stderr, "Горячие клавиши работают только с readline — с -noreadline они не сработают.")
+		}
 		replPlain(ctx, a)
 	} else {
-		repl(ctx, a, client)
+		repl(ctx, a, client, hotkeysCfg)
 	}
 }
 
@@ -201,15 +218,55 @@ func speakerNames(speakers []quasar.Device) string {
 // keep going". History is in-memory for the session only — nothing is
 // written to disk.
 //
+// hotkeysCfg's bindings (see app.HotkeyConfig/hotkeys.json.default) are
+// wired up through readline's Config.FuncFilterInputRune — a hook that
+// sees every decoded keystroke before the library's own line-editing
+// does anything with it. Ctrl+O/V/X are plain single-byte ASCII control
+// codes, so they reach this hook directly with zero ANSI-escape parsing
+// involved (see app.ValidHotkeyNames's doc comment for why only these
+// three, and why F-keys/Alt+letter/media keys can't work this way at
+// all — that would need patching the vendored readline library itself,
+// not attempted here). A bound key runs its command line immediately
+// (no Enter needed) and is otherwise swallowed — never inserted into
+// the buffer as a literal control character.
+//
 // If stdin isn't a real terminal (piped input, some non-standard
 // terminal readline can't drive), it falls back to plain line-by-line
-// reading with no history — same as before this feature existed, so
-// nothing regresses for scripted/non-interactive use.
-func repl(ctx context.Context, a *app.App, client *quasar.Client) {
-	rl, err := readline.NewEx(&readline.Config{
+// reading with no history and no hotkeys — same as before this feature
+// existed, so nothing regresses for scripted/non-interactive use.
+func repl(ctx context.Context, a *app.App, client *quasar.Client, hotkeysCfg *app.HotkeyConfig) {
+	hotkeys := make(map[rune]string, len(hotkeysCfg.Bindings))
+	for _, b := range hotkeysCfg.Bindings {
+		r, ok := app.HotkeyRune(b.Key)
+		if !ok {
+			// app.LoadHotkeyConfig already rejects unknown key names, so
+			// this shouldn't happen in practice — fail loudly instead of
+			// silently dropping the binding if it somehow does.
+			fmt.Fprintf(os.Stderr, "внутренняя ошибка: неизвестная клавиша %q в конфиге хоткеев, пропускаю\n", b.Key)
+			continue
+		}
+		hotkeys[r] = b.Command
+	}
+
+	// rl is declared before the Config it's passed to, and assigned
+	// after — FuncFilterInputRune's closure captures it by reference and
+	// only actually uses it once ReadLine() starts running, by which
+	// point rl is already set.
+	var rl *readline.Instance
+	cfg := &readline.Config{
 		Prompt:       "> ",
 		AutoComplete: newCompleter(a, client),
-	})
+	}
+	if len(hotkeys) > 0 {
+		cfg.FuncFilterInputRune = func(r rune) (rune, bool) {
+			if line, bound := hotkeys[r]; bound {
+				runHotkey(ctx, a, rl, line)
+				return 0, false // consumed: not inserted into the buffer
+			}
+			return r, true
+		}
+	}
+	rl, err := readline.NewEx(cfg)
 	if err != nil {
 		replPlain(ctx, a)
 		return
@@ -239,6 +296,25 @@ func repl(ctx context.Context, a *app.App, client *quasar.Client) {
 		}
 	}
 	fmt.Println("\nОтключено.")
+}
+
+// runHotkey runs a hotkey's bound command line (adding the leading "/"
+// if the binding's author left it off, same convention as -c) and
+// prints its result through rl — an io.Writer that redraws the
+// in-progress prompt/buffer cleanly around the printed line instead of
+// corrupting it, the same general mechanism the library uses internally
+// for anything else that needs to print mid-edit.
+func runHotkey(ctx context.Context, a *app.App, rl *readline.Instance, line string) {
+	if !strings.HasPrefix(line, "/") {
+		line = "/" + line
+	}
+	out, err := a.Execute(ctx, line)
+	switch {
+	case err != nil:
+		fmt.Fprintln(rl, "Ошибка:", err)
+	case out != "":
+		fmt.Fprintln(rl, out)
+	}
 }
 
 // replPlain is the original bufio-based reader, kept as a fallback for
