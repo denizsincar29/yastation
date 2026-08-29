@@ -369,9 +369,12 @@ func (a *App) registerCommands() {
 			}
 			var parts []string
 			for _, act := range actions {
-				if act.Kind == "say" {
+				switch act.Kind {
+				case "say":
 					parts = append(parts, "сказать: "+act.Text)
-				} else {
+				case "sound":
+					parts = append(parts, "звук: "+act.SoundName)
+				default:
 					parts = append(parts, "команда: "+act.Text)
 				}
 			}

@@ -232,3 +232,34 @@ func TestCapSayWhisperWireShape(t *testing.T) {
 		t.Fatalf("value = %#v", value)
 	}
 }
+
+// TestCapSoundPlayWireShape locks in the standalone sound_play capability
+// the batch emitter uses for a sound that can't be inlined into a say step:
+// {"sound","sound_name"} — the shape the sound_play smart-home capability
+// validates, accepted in a cloud scenario step (probe against a live
+// account).
+func TestCapSoundPlayWireShape(t *testing.T) {
+	cap := ScenarioCapability{
+		Type:  "devices.capabilities.quasar",
+		State: ScenarioCapabilityState{Instance: "sound_play", Value: map[string]any{"sound": "explosion-1", "sound_name": "Взрыв 1"}},
+	}
+	b, err := json.Marshal(cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["type"] != "devices.capabilities.quasar" {
+		t.Fatalf("type = %v", got["type"])
+	}
+	state := got["state"].(map[string]any)
+	if state["instance"] != "sound_play" {
+		t.Fatalf("instance = %v", state["instance"])
+	}
+	value := state["value"].(map[string]any)
+	if value["sound"] != "explosion-1" || value["sound_name"] != "Взрыв 1" {
+		t.Fatalf("value = %#v", value)
+	}
+}

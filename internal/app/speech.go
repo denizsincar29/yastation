@@ -85,8 +85,37 @@ func splitWhisperSegments(text string) []speechSegment {
 // aloud, which is never what's wanted — listing candidates when there's
 // more than one match.
 func expandSoundTags(text string) (string, error) {
-	const numero = "№"
 	var b strings.Builder
+	for _, p := range splitMarkers(text) {
+		if p.kind == "text" {
+			b.WriteString(p.text)
+			continue
+		}
+		fullID, candidates, ok := sounds.FindSpeakerAudio(p.text)
+		if !ok {
+			return "", fmt.Errorf("%s", sounds.FormatCandidates(p.text, candidates))
+		}
+		fmt.Fprintf(&b, `<speaker audio="%s.opus">`, fullID)
+	}
+	return b.String(), nil
+}
+
+// soundMark is one marker-level piece of text: a literal run, or a single
+// "[query]"/"№query№" sound marker (the query still unresolved, so the
+// batch can choose between inlining it and playing it as a sound_play step).
+type soundMark struct {
+	kind string // "text" | "sound"
+	text string // literal text for "text", the query for "sound"
+}
+
+// splitMarkers splits text on sound markers, preserving order. The marker
+// rules are identical to what expandSoundTags used to parse inline: "["
+// and "№" both open, the earlier of the two wins, each closes on its own
+// delimiter ("]" / "№"), and an unterminated opener stays literal. An
+// empty marker is kept as a "sound" piece — the resolver rejects it later.
+func splitMarkers(text string) []soundMark {
+	const numero = "№"
+	var pieces []soundMark
 	for text != "" {
 		bracketIdx := strings.IndexByte(text, '[')
 		numeroIdx := strings.Index(text, numero)
@@ -96,7 +125,7 @@ func expandSoundTags(text string) (string, error) {
 		var closeDelim string
 		switch {
 		case bracketIdx == -1 && numeroIdx == -1:
-			b.WriteString(text)
+			pieces = append(pieces, soundMark{kind: "text", text: text})
 			text = ""
 			continue
 		case numeroIdx == -1 || (bracketIdx != -1 && bracketIdx < numeroIdx):
@@ -105,105 +134,109 @@ func expandSoundTags(text string) (string, error) {
 			start, openLen, closeDelim = numeroIdx, len(numero), numero
 		}
 
-		b.WriteString(text[:start])
+		if start > 0 {
+			pieces = append(pieces, soundMark{kind: "text", text: text[:start]})
+		}
 		rest := text[start+openLen:]
 		end := strings.Index(rest, closeDelim)
 		if end == -1 {
 			// No closing delimiter — not our markup, keep it literal.
-			b.WriteString(text[start:])
+			pieces = append(pieces, soundMark{kind: "text", text: text[start:]})
 			text = ""
 			continue
 		}
-		query := strings.TrimSpace(rest[:end])
-		fullID, candidates, ok := sounds.FindSpeakerAudio(query)
-		if !ok {
-			return "", fmt.Errorf("%s", sounds.FormatCandidates(query, candidates))
-		}
-		fmt.Fprintf(&b, `<speaker audio="%s.opus">`, fullID)
+		pieces = append(pieces, soundMark{kind: "sound", text: strings.TrimSpace(rest[:end])})
 		text = rest[end+len(closeDelim):]
 	}
-	return b.String(), nil
+	return pieces
 }
 
-// batchActions turns a batch phrases string into ordered say actions, each
-// fitting quasar.MaxTTSChunkChars. An explicit "|" separator forces a
+// batchActions turns a batch phrases string into ordered actions, each say
+// step fitting quasar.MaxTTSChunkChars. An explicit "|" separator forces a
 // boundary between parts; inside a part, ((...)) whisper segments become
-// their own whisper steps and [query]/№query№ sound tags are expanded
-// first, so chunking never cuts through one. This is how /batch speaks a
-// long story that mixes normal voice, a whispered aside and embedded
-// sounds — all as one cloud scenario.
+// their own whisper steps. A [query]/№query№ sound marker is inlined as a
+// <speaker audio="..."> tag when the current chunk has room, else it plays
+// as its own sound_play step (see batchSegmentActions) — so a long story
+// that mixes normal voice, a whispered aside and several sounds still fits
+// one cloud scenario.
 func batchActions(text string) ([]quasar.BatchAction, error) {
 	var acts []quasar.BatchAction
 	for _, part := range strings.Split(text, "|") {
 		for _, seg := range splitWhisperSegments(part) {
-			expanded, err := expandSoundTags(seg.Text)
+			segActs, err := batchSegmentActions(seg, quasar.MaxTTSChunkChars)
 			if err != nil {
 				return nil, err
 			}
-			for _, chunk := range chunkSoundSafe(expanded, quasar.MaxTTSChunkChars) {
-				acts = append(acts, quasar.BatchAction{Kind: "say", Text: chunk, Whisper: seg.Whisper})
-			}
+			acts = append(acts, segActs...)
 		}
 	}
 	return acts, nil
 }
 
-// chunkSoundSafe splits expanded TTS text — which may contain embedded
-// <speaker audio="..."> tags — into pieces that each fit within max,
-// never cutting through a tag. Tags are short enough to always fit on
-// their own, so each is treated as an atomic token: a chunk either holds
-// the whole tag or none of it.
-func chunkSoundSafe(text string, max int) []string {
-	var chunks []string
+// batchSegmentActions turns one whisper segment into ordered batch actions.
+// Sound markers are resolved in the embeddable speaker-audio library and
+// inlined as <speaker audio="..."> tags whenever the current chunk has
+// room; when a tag would overflow the cap, the sound instead plays as a
+// standalone sound_play step (quasar.BatchAction Kind "sound") if the same
+// query also resolves in the sound_play library. Only when neither fits is
+// the tag pushed into its own next chunk, so a sound is never lost. Long
+// literal runs are split by splitChunks, keeping sentence boundaries.
+func batchSegmentActions(seg speechSegment, max int) ([]quasar.BatchAction, error) {
+	var acts []quasar.BatchAction
 	var cur []rune
-	for _, piece := range soundPieces(text) {
-		pr := []rune(piece)
-		if len(cur)+len(pr) <= max {
+	flush := func() {
+		if s := strings.TrimSpace(string(cur)); s != "" {
+			acts = append(acts, quasar.BatchAction{Kind: "say", Text: s, Whisper: seg.Whisper})
+		}
+		cur = nil
+	}
+	for _, p := range splitMarkers(seg.Text) {
+		if p.kind == "text" {
+			pr := []rune(p.text)
+			if len(cur)+len(pr) <= max {
+				cur = append(cur, pr...)
+				continue
+			}
+			flush()
+			if len(pr) > max {
+				for _, c := range splitChunks(p.text, max) {
+					acts = append(acts, quasar.BatchAction{Kind: "say", Text: c, Whisper: seg.Whisper})
+				}
+				continue
+			}
 			cur = append(cur, pr...)
 			continue
 		}
-		if s := strings.TrimSpace(string(cur)); s != "" {
-			chunks = append(chunks, s)
+		fullID, candidates, ok := sounds.FindSpeakerAudio(p.text)
+		if !ok {
+			return nil, fmt.Errorf("%s", sounds.FormatCandidates(p.text, candidates))
 		}
-		cur = nil
-		if len(pr) > max {
-			// Only a long literal run lands here — a tag is short. Reuse the
-			// plain chunker, which keeps sentence/comma/space boundaries (the
-			// piece holds no tags to protect).
-			chunks = append(chunks, splitChunks(piece, max)...)
+		tag := fmt.Sprintf(`<speaker audio="%s.opus">`, fullID)
+		if len(cur)+len([]rune(tag)) <= max {
+			cur = append(cur, []rune(tag)...)
 			continue
 		}
-		cur = append(cur, pr...)
+		flush()
+		if id, name, ok := soundEffect(p.text); ok {
+			acts = append(acts, quasar.BatchAction{Kind: "sound", SoundID: id, SoundName: name})
+			continue
+		}
+		cur = append(cur, []rune(tag)...)
 	}
-	if s := strings.TrimSpace(string(cur)); s != "" {
-		chunks = append(chunks, s)
-	}
-	return chunks
+	flush()
+	return acts, nil
 }
 
-// soundPieces splits expanded TTS text into alternating literal and sound
-// tag pieces, preserving order.
-func soundPieces(text string) []string {
-	var pieces []string
-	for text != "" {
-		i := strings.Index(text, "<speaker audio=")
-		if i == -1 {
-			pieces = append(pieces, text)
-			break
-		}
-		if i > 0 {
-			pieces = append(pieces, text[:i])
-		}
-		rest := text[i:]
-		j := strings.IndexByte(rest, '>')
-		if j == -1 {
-			pieces = append(pieces, rest)
-			break
-		}
-		pieces = append(pieces, rest[:j+1])
-		text = rest[j+1:]
+// soundEffect resolves query in the sound_play library, returning the
+// standalone-effect id and its Russian display name. Best-effort: a query
+// that doesn't resolve uniquely there simply reports ok=false, so callers
+// keep the inline tag instead of inventing a sound.
+func soundEffect(query string) (id, name string, ok bool) {
+	id, _, found := sounds.FindEffect(query)
+	if !found || id == "" {
+		return "", "", false
 	}
-	return pieces
+	return id, sounds.EffectNameByID(id), true
 }
 
 func splitChunks(text string, max int) []string {

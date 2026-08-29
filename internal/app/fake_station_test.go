@@ -59,9 +59,12 @@ func (f *fakeStation) Volume(station string, level float64) error {
 func (f *fakeStation) Batch(station string, actions []quasar.BatchAction) error {
 	var parts []string
 	for _, a := range actions {
-		if a.Kind == "say" && a.Whisper {
+		switch {
+		case a.Kind == "say" && a.Whisper:
 			parts = append(parts, "whisper:"+a.Text)
-		} else {
+		case a.Kind == "sound":
+			parts = append(parts, "sound:"+a.SoundID)
+		default:
 			parts = append(parts, a.Kind+":"+a.Text)
 		}
 	}

@@ -328,14 +328,19 @@ func (c *Client) updateScenarioPhrase(id string, build Scenario) error {
 
 // BatchAction is one step in a batch scenario (see Client.Batch).
 type BatchAction struct {
-	// Kind is "say" — Alice reads Text aloud (TTS) — or "cmd" — Text is
+	// Kind is "say" — Alice reads Text aloud (TTS) — "cmd" — Text is
 	// sent as a voice command, the same thing Command does ("останови",
-	// "громкость на 7", "продолжить", ...).
+	// "громкость на 7", "продолжить", ...) — or "sound" — a standalone
+	// sound_play effect (SoundID/SoundName), used when a sound can't be
+	// embedded in a say step's text.
 	Kind string
 	Text string
 	// Whisper only applies to Kind "say": read the step in a whisper
 	// (the tts capability's whisper flag) instead of the normal voice.
 	Whisper bool
+	// SoundID and SoundName only apply to Kind "sound".
+	SoundID   string
+	SoundName string
 }
 
 // Batch runs a sequence of actions on one station in a single cloud
@@ -364,6 +369,11 @@ func (c *Client) Batch(station string, actions []BatchAction) error {
 			caps = append(caps, ScenarioCapability{
 				Type:  "devices.capabilities.quasar.server_action",
 				State: ScenarioCapabilityState{Instance: "text_action", Value: a.Text},
+			})
+		case "sound":
+			caps = append(caps, ScenarioCapability{
+				Type:  "devices.capabilities.quasar",
+				State: ScenarioCapabilityState{Instance: "sound_play", Value: map[string]any{"sound": a.SoundID, "sound_name": a.SoundName}},
 			})
 		default:
 			return fmt.Errorf("batch: неизвестный тип действия %q (допустимо say|cmd)", a.Kind)

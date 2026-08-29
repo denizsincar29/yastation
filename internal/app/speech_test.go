@@ -235,27 +235,69 @@ func TestBatchActionsWhisperSegmentBecomesWhisperStep(t *testing.T) {
 	}
 }
 
-func TestBatchActionsSoundTagNeverSplitAcrossChunks(t *testing.T) {
-	// The explosion tag sits right where the plain chunker's 96-rune window
-	// would have landed; it must survive whole, never cut in two.
+func TestBatchActionsSoundTagInlinesWhenRoom(t *testing.T) {
+	// Short text around the sound leaves room for the whole <speaker audio>
+	// tag inside a single say step — no separate sound_play needed.
 	tag := `<speaker audio="alice-sounds-things-explosion-1.opus">`
+	text := strings.Repeat("а", 10) + "[взрыв]" + strings.Repeat("б", 10)
+	got, err := batchActions(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{{Kind: "say", Text: strings.Repeat("а", 10) + tag + strings.Repeat("б", 10)}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%+v want=%+v", got, want)
+	}
+}
+
+func TestBatchActionsSoundTagBecomesSoundPlayWhenNoRoom(t *testing.T) {
+	// 70 a's push the tag past the 96-rune cap, so the smart chunker plays
+	// the explosion as a standalone sound_play step instead of splitting the
+	// tag — "взрыв" resolves in the effects catalog (explosion-1).
 	text := strings.Repeat("а", 70) + "[взрыв]" + strings.Repeat("б", 30)
 	got, err := batchActions(text)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var joined string
+	want := []quasar.BatchAction{
+		{Kind: "say", Text: strings.Repeat("а", 70)},
+		{Kind: "sound", SoundID: "explosion-1", SoundName: "Взрыв 1"},
+		{Kind: "say", Text: strings.Repeat("б", 30)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%+v want=%+v", got, want)
+	}
 	for _, g := range got {
-		joined += g.Text
+		if g.Kind == "say" && len([]rune(g.Text)) > quasar.MaxTTSChunkChars {
+			t.Fatalf("chunk exceeds cap: %d runes %q", len([]rune(g.Text)), g.Text)
+		}
+	}
+}
+
+func TestBatchActionsSoundWithoutEffectPushesInlineToNextChunk(t *testing.T) {
+	// "бензопила" exists in the <speaker audio> catalog but has no sound_play
+	// effect, so when the current chunk is full the tag is carried whole into
+	// the next chunk — the sound is never lost.
+	tag := `<speaker audio="alice-sounds-things-chainsaw-1.opus">`
+	text := strings.Repeat("а", 70) + "[бензопила]" + strings.Repeat("б", 30)
+	got, err := batchActions(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{
+		{Kind: "say", Text: strings.Repeat("а", 70)},
+		{Kind: "say", Text: tag + strings.Repeat("б", 30)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%+v want=%+v", got, want)
+	}
+	for _, g := range got {
 		if len([]rune(g.Text)) > quasar.MaxTTSChunkChars {
 			t.Fatalf("chunk exceeds cap: %d runes %q", len([]rune(g.Text)), g.Text)
 		}
 		if strings.Contains(g.Text, "<speaker") && !strings.Contains(g.Text, ">") {
 			t.Fatalf("tag cut in half: %q", g.Text)
 		}
-	}
-	if n := strings.Count(joined, tag); n != 1 {
-		t.Fatalf("sound tag lost or duplicated (found %d): chunks=%+v", n, got)
 	}
 }
 
