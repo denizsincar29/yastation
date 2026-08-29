@@ -162,6 +162,14 @@ type scenariosResponse struct {
 }
 
 func scenarioActionStep(deviceID string, capability ScenarioCapability) ScenarioStep {
+	return scenarioActionStepMany(deviceID, []ScenarioCapability{capability})
+}
+
+// scenarioActionStepMany builds the same step but with several
+// capabilities on the same device — a batch: Yandex runs them in order,
+// Alice finishing each action before the next starts (no delay between
+// them).
+func scenarioActionStepMany(deviceID string, caps []ScenarioCapability) ScenarioStep {
 	return ScenarioStep{
 		Type: "scenarios.steps.actions.v2",
 		Parameters: ScenarioStepParameters{
@@ -171,7 +179,7 @@ func scenarioActionStep(deviceID string, capability ScenarioCapability) Scenario
 				Value: ScenarioActionItemValue{
 					ID:           deviceID,
 					ItemType:     "device",
-					Capabilities: []ScenarioCapability{capability},
+					Capabilities: caps,
 				},
 			}},
 		},
@@ -198,6 +206,25 @@ func buildTTSScenario(name string, dev Device, text string) Scenario {
 			Type:  "devices.capabilities.quasar",
 			State: ScenarioCapabilityState{Instance: "tts", Value: map[string]string{"text": text}},
 		})},
+	}
+}
+
+// MaxTTSChunkChars caps a single tts phrase inside a cloud scenario. The
+// exact Yandex limit is undocumented and differs by report — 128 is a safe,
+// changeable ceiling. Longer text is split before batching (see
+// internal/app.splitSpeech), so this is the one knob to turn if a phrase
+// ever fails to play because it's too long.
+const MaxTTSChunkChars = 128
+
+// buildBatchScenario is a scenario that runs several capabilities on one
+// device back to back (see scenarioActionStepMany) — the batching
+// mechanism Client.Batch uses.
+func buildBatchScenario(name string, dev Device, caps []ScenarioCapability) Scenario {
+	return Scenario{
+		Name:     name,
+		Icon:     "home",
+		Triggers: scenarioTrigger(dev),
+		Steps:    []ScenarioStep{scenarioActionStepMany(dev.ID, caps)},
 	}
 }
 

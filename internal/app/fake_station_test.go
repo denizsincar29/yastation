@@ -3,7 +3,10 @@ package app
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+
+	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
 // fakeStation records every call it receives instead of talking to
@@ -52,6 +55,13 @@ func (f *fakeStation) Notify(station, text string, volume float64) error {
 }
 func (f *fakeStation) Volume(station string, level float64) error {
 	return f.record(fmt.Sprintf("volume:%s:%v", station, level))
+}
+func (f *fakeStation) Batch(station string, actions []quasar.BatchAction) error {
+	var parts []string
+	for _, a := range actions {
+		parts = append(parts, a.Kind+":"+a.Text)
+	}
+	return f.record(fmt.Sprintf("batch:%s:%s", station, strings.Join(parts, ";")))
 }
 func (f *fakeStation) RunScenario(name string) error { return f.record("scenario:" + name) }
 func (f *fakeStation) ListScenarios() []string       { return f.scenarios }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -450,6 +451,71 @@ func TestRefresh(t *testing.T) {
 	calls := f.Calls()
 	if len(calls) != 1 || calls[0] != "refresh" {
 		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestBatchOrdersActionsStopVolumePhrasesPlay(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	out, err := a.ExecuteArgs(context.Background(), "batch", []string{"1", "7", "1", "привет | как дела"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[батч]", "команда: останови", "команда: громкость на 7", "сказать: привет", "сказать: как дела", "команда: продолжить"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("out=%q missing %q", out, want)
+		}
+	}
+	calls := f.Calls()
+	want := []string{"batch::cmd:останови;cmd:громкость на 7;say:привет;say:как дела;cmd:продолжить"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestBatchWithoutStopOrPlay(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	if _, err := a.ExecuteArgs(context.Background(), "batch", []string{"", "6", "", "привет"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	want := []string{"batch::cmd:громкость на 6;say:привет"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestBatchEmptyErrors(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.ExecuteArgs(context.Background(), "batch", nil); err == nil {
+		t.Fatal("expected error for an empty batch")
+	}
+}
+
+func TestBatchRejectsNonNumericVolume(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.ExecuteArgs(context.Background(), "batch", []string{"", "loud", "", "скажи"}); err == nil {
+		t.Fatal("expected error for non-numeric volume")
+	}
+}
+
+func TestBatchSplitsLongPhrases(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	long := strings.Repeat("а", 300)
+	if _, err := a.ExecuteArgs(context.Background(), "batch", []string{"", "", "", long}); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls=%v", calls)
+	}
+	want := "batch::say:" + strings.Repeat("а", 128) + ";say:" + strings.Repeat("а", 128) + ";say:" + strings.Repeat("а", 44)
+	if calls[0] != want {
+		t.Fatalf("call=%q want=%q", calls[0], want)
 	}
 }
 

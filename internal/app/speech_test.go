@@ -2,7 +2,10 @@ package app
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
 func TestSplitWhisperSegmentsPlainText(t *testing.T) {
@@ -177,5 +180,84 @@ func TestSpeakStopsOnFirstSegmentError(t *testing.T) {
 	// Only the first (failing) call should have been attempted.
 	if calls := f.Calls(); len(calls) != 0 {
 		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestSplitSpeechStaysWholeWhenShort(t *testing.T) {
+	got := splitSpeech("привет как дела")
+	want := []string{"привет как дела"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitSpeechPipeForcesChunks(t *testing.T) {
+	got := splitSpeech("один | два | три")
+	want := []string{"один", "два", "три"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitSpeechDropsEmptyPipeParts(t *testing.T) {
+	got := splitSpeech("один | | два")
+	want := []string{"один", "два"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitChunksCutsAtLastPeriod(t *testing.T) {
+	// "Hello world." ends at rune 12 (< 128); the rest has no boundary
+	// before the cap, so the cut lands right after the period.
+	text := "Hello world. " + strings.Repeat("x", 120)
+	got := splitSpeech(text)
+	want := []string{"Hello world.", strings.Repeat("x", 120)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
+	// The "." inside "3.5" isn't followed by a space, so it must not be
+	// taken for a sentence end and split the number apart.
+	text := strings.Repeat("a", 100) + " 3.5 " + strings.Repeat("b", 100)
+	got := splitSpeech(text)
+	if len(got) != 2 {
+		t.Fatalf("got=%q", got)
+	}
+	if !strings.Contains(got[0], "3.5") {
+		t.Fatalf("first chunk broke the decimal apart: %q", got[0])
+	}
+}
+
+func TestSplitChunksCutsAtLastCommaWhenNoPeriod(t *testing.T) {
+	text := strings.Repeat("a", 100) + ", " + strings.Repeat("b", 100)
+	got := splitSpeech(text)
+	want := []string{strings.Repeat("a", 100) + ",", strings.Repeat("b", 100)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitChunksCutsAtLastSpaceWhenNoPunctuation(t *testing.T) {
+	text := strings.Repeat("a", 100) + " " + strings.Repeat("b", 100)
+	got := splitSpeech(text)
+	want := []string{strings.Repeat("a", 100), strings.Repeat("b", 100)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitChunksHardSplitsSingleLongWord(t *testing.T) {
+	text := strings.Repeat("a", 300)
+	got := splitSpeech(text)
+	want := []string{
+		strings.Repeat("a", quasar.MaxTTSChunkChars),
+		strings.Repeat("a", quasar.MaxTTSChunkChars),
+		strings.Repeat("a", 300-2*quasar.MaxTTSChunkChars),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
 	}
 }

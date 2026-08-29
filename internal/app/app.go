@@ -39,6 +39,7 @@ type StationAPI interface {
 	Command(station, text string) error
 	Notify(station, text string, volume float64) error
 	Volume(station string, level float64) error
+	Batch(station string, actions []quasar.BatchAction) error
 	RunScenario(name string) error
 	ListScenarios() []string
 	Diagnostics() (string, error)
@@ -256,6 +257,15 @@ func notifyVolume(args []string) (float64, []string) {
 	return 4, args
 }
 
+// truthy reports whether a string flag like "1"/"true"/"да" reads as on.
+func truthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "да", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func (a *App) registerCommands() {
 	d := a.Dispatcher
 
@@ -318,6 +328,53 @@ func (a *App) registerCommands() {
 			}
 			return "[команда отправлена] " + text, nil
 		}, "cmd", "c", "ask")
+
+	// batch runs several actions in ONE cloud scenario: stop, volume,
+	// phrases (each split to fit quasar.MaxTTSChunkChars), then play.
+	// Yandex executes them in order, Alice finishing each before the next —
+	// the batch the local Glagol protocol can't do (see quasar.Client.Batch).
+	d.HandleBoundCat("Основное",
+		"Батч: несколько действий одним облачным сценарием — Алиса договаривает, делает следующее. /batch [stop] [volume] [play] [фразы через |] — например /batch 1 7 \"привет | как дела\"",
+		true,
+		[]dispatch.Param{
+			{Name: "stop", Kind: "string", Optional: true, Help: "\"1\" — сначала остановить музыку"},
+			{Name: "volume", Kind: "number", Optional: true, Help: "Громкость 0..10"},
+			{Name: "play", Kind: "string", Optional: true, Help: "\"1\" — в конце продолжить музыку"},
+			{Name: "phrases", Kind: "string", Optional: true, Help: "Текст для озвучивания; фразы через |, каждая режется до ~128 символов"},
+		},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			var actions []quasar.BatchAction
+			if truthy(v["stop"]) {
+				actions = append(actions, quasar.BatchAction{Kind: "cmd", Text: "останови"})
+			}
+			if vol := strings.TrimSpace(v["volume"]); vol != "" {
+				if _, err := strconv.ParseFloat(vol, 64); err != nil {
+					return "", fmt.Errorf("volume не число: %q", vol)
+				}
+				actions = append(actions, quasar.BatchAction{Kind: "cmd", Text: "громкость на " + vol})
+			}
+			for _, p := range splitSpeech(v["phrases"]) {
+				actions = append(actions, quasar.BatchAction{Kind: "say", Text: p})
+			}
+			if truthy(v["play"]) {
+				actions = append(actions, quasar.BatchAction{Kind: "cmd", Text: "продолжить"})
+			}
+			if len(actions) == 0 {
+				return "", fmt.Errorf("пустой батч — укажи хотя бы stop, volume, play или phrases")
+			}
+			if err := a.Client.Batch(station, actions); err != nil {
+				return "", err
+			}
+			var parts []string
+			for _, act := range actions {
+				if act.Kind == "say" {
+					parts = append(parts, "сказать: "+act.Text)
+				} else {
+					parts = append(parts, "команда: "+act.Text)
+				}
+			}
+			return "[батч] " + strings.Join(parts, "; "), nil
+		}, "batch")
 
 	// notify keeps its own legacy REPL handler (HandleNamed, not
 	// HandleBoundCat) because its documented slash syntax puts volume=

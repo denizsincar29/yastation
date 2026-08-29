@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/denizsincar29/yastation/internal/quasar"
 	"github.com/denizsincar29/yastation/internal/sounds"
 )
 
@@ -122,6 +123,91 @@ func expandSoundTags(text string) (string, error) {
 		text = rest[end+len(closeDelim):]
 	}
 	return b.String(), nil
+}
+
+// splitSpeech splits text into utterance chunks that each fit within
+// quasar.MaxTTSChunkChars — used by /batch to turn one long phrase into
+// several tts items in a single cloud scenario. An explicit "|" separator
+// forces a chunk boundary; each part is then cut at the last sentence end
+// (.!?…), else the last comma/semicolon/dash, else the last space, so
+// Alice never starts mid-word. A single word longer than the cap is
+// hard-split.
+func splitSpeech(text string) []string {
+	var out []string
+	for _, part := range strings.Split(text, "|") {
+		out = append(out, splitChunks(strings.TrimSpace(part), quasar.MaxTTSChunkChars)...)
+	}
+	return out
+}
+
+func splitChunks(text string, max int) []string {
+	runes := []rune(text)
+	if len(runes) <= max {
+		if text != "" {
+			return []string{text}
+		}
+		return nil
+	}
+	var out []string
+	start := 0
+	for start < len(runes) {
+		end := start + max
+		if end >= len(runes) {
+			// The rest already fits — take it whole instead of hunting a
+			// boundary inside it (avoids splitting the final chunk more
+			// than needed).
+			if s := strings.TrimSpace(string(runes[start:])); s != "" {
+				out = append(out, s)
+			}
+			break
+		}
+		cut := bestCut(runes, start, end)
+		if cut <= start {
+			cut = end
+		}
+		if s := strings.TrimSpace(string(runes[start:cut])); s != "" {
+			out = append(out, s)
+		}
+		start = cut
+	}
+	return out
+}
+
+// bestCut returns the index just past the last good boundary in
+// runes[start:end]: a sentence ender followed by whitespace (so a decimal
+// point like "3.5" isn't taken for one), else the last
+// comma/semicolon/dash, else the last space. 0 if there's no boundary at
+// all — caller hard-splits.
+func bestCut(runes []rune, start, end int) int {
+	for i := end - 1; i >= start; i-- {
+		if !isSentenceEnd(runes[i]) {
+			continue
+		}
+		if i+1 < len(runes) && runes[i+1] != ' ' {
+			continue
+		}
+		return i + 1
+	}
+	for i := end - 1; i >= start; i-- {
+		switch runes[i] {
+		case ',', ';', '—':
+			return i + 1
+		}
+	}
+	for i := end - 1; i >= start; i-- {
+		if runes[i] == ' ' {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func isSentenceEnd(r rune) bool {
+	switch r {
+	case '.', '!', '?', '…':
+		return true
+	}
+	return false
 }
 
 // speak sends text to station: split on ((whisper)) boundaries into

@@ -315,6 +315,59 @@ func (c *Client) updateScenarioPhrase(id string, build Scenario) error {
 	return nil
 }
 
+// BatchAction is one step in a batch scenario (see Client.Batch).
+type BatchAction struct {
+	// Kind is "say" — Alice reads Text aloud (TTS) — or "cmd" — Text is
+	// sent as a voice command, the same thing Command does ("останови",
+	// "громкость на 7", "продолжить", ...).
+	Kind string
+	Text string
+}
+
+// Batch runs a sequence of actions on one station in a single cloud
+// scenario: Yandex executes them in order, Alice finishing each action
+// before starting the next. There's no delay between them — for a pause
+// between groups, send two batches. This is the batching the local Glagol
+// protocol can't do (each Glagol sendText is exactly one command, see
+// PROTOCOL_NOTES.md), so Batch always goes through the cloud regardless
+// of whether a Glagol host is registered. An empty actions list is an
+// error.
+func (c *Client) Batch(station string, actions []BatchAction) error {
+	dev, err := c.selectSpeaker(station)
+	if err != nil {
+		return err
+	}
+	caps := make([]ScenarioCapability, 0, len(actions))
+	for _, a := range actions {
+		switch a.Kind {
+		case "say":
+			caps = append(caps, ScenarioCapability{
+				Type:  "devices.capabilities.quasar",
+				State: ScenarioCapabilityState{Instance: "tts", Value: map[string]string{"text": a.Text}},
+			})
+		case "cmd":
+			caps = append(caps, ScenarioCapability{
+				Type:  "devices.capabilities.quasar.server_action",
+				State: ScenarioCapabilityState{Instance: "text_action", Value: a.Text},
+			})
+		default:
+			return fmt.Errorf("batch: неизвестный тип действия %q (допустимо say|cmd)", a.Kind)
+		}
+	}
+	if len(caps) == 0 {
+		return fmt.Errorf("batch: пустой список действий")
+	}
+	build := buildBatchScenario("yastation: "+dev.Name, dev, caps)
+	id, err := c.ensureScenario(dev, "batch", build)
+	if err != nil {
+		return err
+	}
+	if err := c.updateScenarioPhrase(id, build); err != nil {
+		return err
+	}
+	return c.runScenarioByID(id)
+}
+
 // --- High level actions ---------------------------------------------------
 // These build a Russian phrase the same way a person would say it to
 // Alice, then push it through sendPhrase. Kept as small, obvious string

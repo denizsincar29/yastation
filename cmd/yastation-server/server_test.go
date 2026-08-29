@@ -62,6 +62,9 @@ func (f *fakeStation) LightScene(station, sceneID string) error           { retu
 func (f *fakeStation) Weather(station string) error                       { return nil }
 func (f *fakeStation) PlayMusic(station string) error                     { return nil }
 func (f *fakeStation) Refresh() error                                     { return nil }
+func (f *fakeStation) Batch(station string, actions []quasar.BatchAction) error {
+	return nil
+}
 
 // --- token cache -----------------------------------------------------
 
