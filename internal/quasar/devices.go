@@ -162,14 +162,6 @@ type scenariosResponse struct {
 }
 
 func scenarioActionStep(deviceID string, capability ScenarioCapability) ScenarioStep {
-	return scenarioActionStepMany(deviceID, []ScenarioCapability{capability})
-}
-
-// scenarioActionStepMany builds the same step but with several
-// capabilities on the same device — a batch: Yandex runs them in order,
-// Alice finishing each action before the next starts (no delay between
-// them).
-func scenarioActionStepMany(deviceID string, caps []ScenarioCapability) ScenarioStep {
 	return ScenarioStep{
 		Type: "scenarios.steps.actions.v2",
 		Parameters: ScenarioStepParameters{
@@ -179,7 +171,7 @@ func scenarioActionStepMany(deviceID string, caps []ScenarioCapability) Scenario
 				Value: ScenarioActionItemValue{
 					ID:           deviceID,
 					ItemType:     "device",
-					Capabilities: caps,
+					Capabilities: []ScenarioCapability{capability},
 				},
 			}},
 		},
@@ -217,14 +209,23 @@ func buildTTSScenario(name string, dev Device, text string) Scenario {
 const MaxTTSChunkChars = 128
 
 // buildBatchScenario is a scenario that runs several capabilities on one
-// device back to back (see scenarioActionStepMany) — the batching
-// mechanism Client.Batch uses.
+// device back to back — the batching mechanism Client.Batch uses. Each
+// action is its own step: the wire shape is confirmed against a live
+// device — a single step carrying several capabilities in one item is
+// rejected (HTTP 400), and one device repeated inside a single step is
+// rejected too ("Нельзя добавить одно и то же устройство в один шаг
+// сценария несколько раз"). Yandex runs the steps in order, Alice
+// finishing each action before the next starts (no delay between them).
 func buildBatchScenario(name string, dev Device, caps []ScenarioCapability) Scenario {
+	steps := make([]ScenarioStep, 0, len(caps))
+	for _, cap := range caps {
+		steps = append(steps, scenarioActionStep(dev.ID, cap))
+	}
 	return Scenario{
 		Name:     name,
 		Icon:     "home",
 		Triggers: scenarioTrigger(dev),
-		Steps:    []ScenarioStep{scenarioActionStepMany(dev.ID, caps)},
+		Steps:    steps,
 	}
 }
 

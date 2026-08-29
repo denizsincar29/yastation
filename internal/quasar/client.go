@@ -310,8 +310,19 @@ func (c *Client) updateScenarioPhrase(id string, build Scenario) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	// Session.Request errors on non-2xx, but Yandex also answers 200 with
+	// {"status":"error", ...} for a structurally-invalid-but-well-formed
+	// payload (e.g. the same device twice in one step) — surfacing those
+	// here instead of silently firing a scenario that wasn't updated.
+	var data struct {
+		Status string `json:"status"`
+	}
+	if err := decodeJSONClose(resp, &data); err != nil {
+		return err
+	}
+	if data.Status != "ok" {
+		return fmt.Errorf("яндекс отклонил обновление сценария: %s", data.Status)
+	}
 	return nil
 }
 

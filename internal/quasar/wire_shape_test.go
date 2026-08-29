@@ -139,9 +139,11 @@ func TestScenarioJSONMatchesConfirmedWireShape(t *testing.T) {
 		}
 	})
 
-	// The batch mechanism: one scenario step whose item's
-	// value.capabilities holds SEVERAL capabilities on the same device,
-	// run in order by a single /actions call.
+	// The batch mechanism: one action per scenario step, run in order by
+	// a single /actions call. Confirmed against a live device — a single
+	// step can't hold several capabilities in one item (HTTP 400) and the
+	// same device can't repeat inside one step (SCENARIO_STEPS_REPEATED_DEVICE),
+	// so a batch is exactly as many steps as there are actions.
 	t.Run("batch", func(t *testing.T) {
 		caps := []ScenarioCapability{
 			{
@@ -170,40 +172,37 @@ func TestScenarioJSONMatchesConfirmedWireShape(t *testing.T) {
 		}
 
 		steps := got["steps"].([]any)
-		if len(steps) != 1 {
-			t.Fatalf("steps = %#v", steps)
+		if len(steps) != 2 {
+			t.Fatalf("expected one step per action, got %d steps: %#v", len(steps), steps)
 		}
-		step := steps[0].(map[string]any)
-		if step["type"] != "scenarios.steps.actions.v2" {
-			t.Fatalf("step type = %v", step["type"])
-		}
-		items := step["parameters"].(map[string]any)["items"].([]any)
-		if len(items) != 1 {
-			t.Fatalf("items = %#v", items)
-		}
-		item := items[0].(map[string]any)
-		if item["type"] != "step.action.item.device" {
-			t.Fatalf("item type = %v", item["type"])
-		}
-		value := item["value"].(map[string]any)
-		if value["item_type"] != "device" {
-			t.Fatalf("item_type = %v", value["item_type"])
-		}
-		if value["id"] != dev.ID {
-			t.Fatalf("value id = %v (want the scenario-system device id %q)", value["id"], dev.ID)
-		}
-
-		capsWire := value["capabilities"].([]any)
-		if len(capsWire) != 2 {
-			t.Fatalf("expected 2 capabilities (the batch), got %d: %#v", len(capsWire), capsWire)
-		}
-		first := capsWire[0].(map[string]any)
-		if first["type"] != "devices.capabilities.quasar" || first["state"].(map[string]any)["instance"] != "tts" {
-			t.Fatalf("first capability = %#v", first)
-		}
-		second := capsWire[1].(map[string]any)
-		if second["type"] != "devices.capabilities.quasar.server_action" || second["state"].(map[string]any)["instance"] != "text_action" {
-			t.Fatalf("second capability = %#v", second)
+		for i, wantType := range []string{"devices.capabilities.quasar", "devices.capabilities.quasar.server_action"} {
+			step := steps[i].(map[string]any)
+			if step["type"] != "scenarios.steps.actions.v2" {
+				t.Fatalf("step %d type = %v", i, step["type"])
+			}
+			items := step["parameters"].(map[string]any)["items"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("step %d items = %#v", i, items)
+			}
+			item := items[0].(map[string]any)
+			if item["type"] != "step.action.item.device" {
+				t.Fatalf("step %d item type = %v", i, item["type"])
+			}
+			value := item["value"].(map[string]any)
+			if value["item_type"] != "device" {
+				t.Fatalf("step %d item_type = %v", i, value["item_type"])
+			}
+			if value["id"] != dev.ID {
+				t.Fatalf("step %d value id = %v (want the scenario-system device id %q)", i, value["id"], dev.ID)
+			}
+			capsWire := value["capabilities"].([]any)
+			if len(capsWire) != 1 {
+				t.Fatalf("step %d expected exactly one capability, got %d: %#v", i, len(capsWire), capsWire)
+			}
+			cap := capsWire[0].(map[string]any)
+			if cap["type"] != wantType {
+				t.Fatalf("step %d capability type = %v (want %v)", i, cap["type"], wantType)
+			}
 		}
 	})
 }
