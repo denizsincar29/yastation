@@ -73,7 +73,14 @@ func mcpRoute(defaultClient *quasar.Client, tokenClients *tokenClientCache, defa
 		}
 		return buildMCPServer(client, r.Header.Get("X-Station"), defaultsCfg, customCfg)
 	}
-	return mcpAccountMiddleware(defaultClient, tokenClients, loadAccess, mcp.NewStreamableHTTPHandler(getServer, nil))
+	// DisableLocalhostProtection: the SDK's DNS-rebinding guard rejects any
+	// request that arrives via loopback with a non-localhost Host header.
+	// Behind a reverse proxy (Caddy/nginx → localhost:port) every request is
+	// loopback with the real domain as Host, so that guard would 403 all of
+	// them. Safe here because mcpAccountMiddleware has already required a
+	// valid allowlisted X-Yandex-Token before any of this runs — the
+	// protection would only matter for an unauthenticated server.
+	return mcpAccountMiddleware(defaultClient, tokenClients, loadAccess, mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true}))
 }
 
 // mcpClientCtxKey is the context key used to hand the already-resolved

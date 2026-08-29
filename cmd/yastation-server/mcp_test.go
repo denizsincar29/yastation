@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,6 +102,40 @@ func TestMCPRejectsUnallowedToken(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 for a token whose uid isn't allowlisted, got %d", resp.StatusCode)
+	}
+}
+
+// TestMCPBehindReverseProxyHost checks the SDK's DNS-rebinding guard is
+// disabled for /mcp. Behind a reverse proxy (Caddy/nginx → localhost:port)
+// every request arrives via loopback yet carries the real domain as the
+// Host header — the SDK's default guard would reject a request that has
+// already passed the auth middleware with "invalid Host", before the MCP
+// layer answers. Here a valid allowlisted token gets through the
+// middleware and must NOT be bounced by the Host guard (see mcpRoute's
+// DisableLocalhostProtection comment).
+func TestMCPBehindReverseProxyHost(t *testing.T) {
+	const goodToken = "good-token"
+	srv := httptest.NewServer(newMCPTestMux(t, "uid-"+goodToken, nil))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}`))
+	req.Host = "station.example.com" // proxy forwards the real domain, not localhost
+	req.Header.Set("X-Yandex-Token", goodToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "invalid Host") {
+		t.Fatalf("the SDK's DNS-rebinding guard still blocks reverse-proxy Host headers: %s", body)
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatalf("expected a real MCP answer (or a non-host 403), not a 403: %s", body)
 	}
 }
 
