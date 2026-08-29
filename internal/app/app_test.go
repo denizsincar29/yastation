@@ -696,6 +696,35 @@ func TestReadCommandFetchesAndReadsAloud(t *testing.T) {
 	}
 }
 
+func TestReadCommandBareURL(t *testing.T) {
+	// /read <url> without the optional [stop] [max] [play] flags must
+	// bind the URL (not swallow it into "stop" like a plain positional
+	// bind would — read has a custom legacy handler).
+	a, f := newTestApp()
+	defer a.Close()
+	a.FetchArticle = func(ctx context.Context, url string) (*article.Article, error) {
+		if url != "https://example.com/radio" {
+			t.Fatalf("FetchArticle url=%q", url)
+		}
+		return &article.Article{
+			Title:  "Радио",
+			Text:   "Просто текст без заголовков.",
+			Source: url,
+		}, nil
+	}
+	out, err := a.Execute(context.Background(), "/read https://example.com/radio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[читать] Радио") {
+		t.Fatalf("out=%q", out)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 || calls[0] != "batch::say:Заголовок: Радио\n\nПросто текст без заголовков." {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
 func TestReadCommandRequiresURL(t *testing.T) {
 	a, _ := newTestApp()
 	defer a.Close()

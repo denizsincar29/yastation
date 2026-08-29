@@ -390,16 +390,13 @@ func (a *App) registerCommands() {
 	// reduced to its main content with headings kept, then batchActions
 	// treats every heading as a new chunk (splitHeadings) so Alice reads the
 	// article as digestible sections rather than one wall of text.
-	d.HandleBoundCat("Основное",
-		"Прочитать статью или страницу по URL через Алису: стягивает страницу, вытаскивает текст (HTML → читаемые секции по заголовкам), зачитывает по частям. /read [stop] [max] [play] <url> — например /read 1 6000 1 https://habr.com/ru/articles/1/",
-		true,
-		[]dispatch.Param{
-			{Name: "stop", Kind: "string", Optional: true, Help: "\"1\" — сначала остановить музыку"},
-			{Name: "max", Kind: "number", Optional: true, Help: "Максимум рун текста для чтения (по умолчанию 6000)"},
-			{Name: "play", Kind: "string", Optional: true, Help: "\"1\" — в конце продолжить музыку"},
-			{Name: "url", Kind: "string", Help: "URL статьи или страницы"},
-		},
-		func(ctx context.Context, station string, v map[string]string) (string, error) {
+	// read keeps its own legacy REPL handler (HandleNamed, not
+	// HandleBoundCat) because the documented slash syntax puts optional
+	// [stop] [max] [play] flags before the URL — a plain positional bind
+	// would swallow the URL into the first flag when called bare as
+	// /read <url>. The bound handler (HTTP JSON bodies, the alice_read
+	// MCP tool) is unaffected: there url is just its own named field.
+	readBound := func(ctx context.Context, station string, v map[string]string) (string, error) {
 			url := strings.TrimSpace(v["url"])
 			if url == "" {
 				return "", fmt.Errorf("нужен URL: /read https://...")
@@ -436,7 +433,36 @@ func (a *App) registerCommands() {
 				out += " (обрезано)"
 			}
 			return out, nil
-		}, "read", "r", "article")
+		}
+		readLegacy := func(ctx context.Context, args []string) (string, error) {
+			station, rest := station(args)
+			if len(rest) == 0 {
+				return "", fmt.Errorf("нужен URL: /read https://...")
+			}
+			url := rest[len(rest)-1] // the URL is the last token — it can't contain spaces
+			flags := rest[:len(rest)-1]
+			values := map[string]string{"url": url}
+			if len(flags) > 0 {
+				values["stop"] = flags[0]
+			}
+			if len(flags) > 1 {
+				values["max"] = flags[1]
+			}
+			if len(flags) > 2 {
+				values["play"] = flags[2]
+			}
+			return readBound(ctx, station, values)
+		}
+		d.HandleNamed("Основное",
+			"Прочитать статью или страницу по URL через Алису: стягивает страницу, вытаскивает текст (HTML → читаемые секции по заголовкам), зачитывает по частям. /read [stop] [max] [play] <url> — например /read 1 6000 1 https://habr.com/ru/articles/1/",
+			true,
+			[]dispatch.Param{
+				{Name: "stop", Kind: "string", Optional: true, Help: "\"1\" — сначала остановить музыку"},
+				{Name: "max", Kind: "number", Optional: true, Help: "Максимум рун текста для чтения (по умолчанию 6000)"},
+				{Name: "play", Kind: "string", Optional: true, Help: "\"1\" — в конце продолжить музыку"},
+				{Name: "url", Kind: "string", Help: "URL статьи или страницы"},
+			},
+			readLegacy, readBound, "read", "r", "article")
 
 	// notify keeps its own legacy REPL handler (HandleNamed, not
 	// HandleBoundCat) because its documented slash syntax puts volume=
