@@ -66,6 +66,10 @@ func TestMCPRejectsMissingTokenWithoutDefaultAccount(t *testing.T) {
 	if h := resp.Header.Get("WWW-Authenticate"); h != "" {
 		t.Fatalf("must never set WWW-Authenticate (it's the RFC9728 cue for MCP clients to start OAuth discovery), got %q", h)
 	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"auth_url"`) || !strings.Contains(string(body), "/auth/start") {
+		t.Fatalf("auth error must carry the /auth/start re-auth link, got: %s", body)
+	}
 }
 
 func TestMCPFallsBackToDefaultAccountWhenNoToken(t *testing.T) {

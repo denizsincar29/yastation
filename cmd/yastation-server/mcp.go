@@ -109,7 +109,7 @@ func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClien
 		xToken := r.Header.Get("X-Yandex-Token")
 		if xToken == "" {
 			if defaultClient == nil {
-				writeMCPAuthError(w, "нужен заголовок X-Yandex-Token (сервер запущен без своего аккаунта — BYOT по умолчанию). "+reauthHint)
+				writeMCPAuthError(w, r, "нужен заголовок X-Yandex-Token (сервер запущен без своего аккаунта — BYOT по умолчанию). "+reauthHint(r))
 				return
 			}
 			ctx := context.WithValue(r.Context(), mcpClientCtxKey{}, defaultClient)
@@ -118,7 +118,7 @@ func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClien
 		}
 		client, _, err := tokenClients.get(xToken, loadAccess())
 		if err != nil {
-			writeMCPAuthError(w, err.Error()+". "+reauthHint)
+			writeMCPAuthError(w, r, err.Error()+". "+reauthHint(r))
 			return
 		}
 		ctx := context.WithValue(r.Context(), mcpClientCtxKey{}, client)
@@ -126,19 +126,47 @@ func mcpAccountMiddleware(defaultClient *quasar.Client, tokenClients *tokenClien
 	})
 }
 
+// authURL reconstructs the server's /auth/start address as the caller
+// sees it — the browser-facing re-auth entry point (see webauth.go), which
+// hands back a fresh x-token to put into the X-Yandex-Token header. It's
+// derived from the request rather than hardcoded so it survives being
+// behind a reverse proxy: Caddy forwards the real domain as Host and the
+// proto as X-Forwarded-Proto, and that's exactly the URL the user should
+// open. "https" is the fallback proto because in production this server
+// only ever answers behind the proxy; the loopback host fallback only
+// matters for tests/plain local curl.
+func authURL(r *http.Request) string {
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		proto = "https"
+	} else if i := strings.IndexByte(proto, ','); i >= 0 {
+		proto = proto[:i]
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost:8737"
+	}
+	return proto + "://" + host + "/auth/start"
+}
+
 // reauthHint is deliberately in English too — MCP client UIs/logs that
 // surface this text tend to render it verbatim, and a short unambiguous
 // instruction beats a client guessing an OAuth flow on its own.
-const reauthHint = "Токен недействителен. Переавторизуйся (go run ./cmd/yastation-auth) и обнови X-Yandex-Token в конфиге клиента. / Token invalid: rerun the authorization and change the header token."
+func reauthHint(r *http.Request) string {
+	url := authURL(r)
+	return "Токен недействителен или истёк. Получи новый: " + url + ". / Token invalid or expired: get a fresh one at " + url + "."
+}
 
 // writeMCPAuthError always answers 403 (see mcpAccountMiddleware for
 // why) and deliberately never sets WWW-Authenticate — that header is
 // specifically what tells spec-compliant MCP clients "start OAuth
-// discovery here", which is the exact behaviour we're avoiding.
-func writeMCPAuthError(w http.ResponseWriter, msg string) {
+// discovery here", which is the exact behaviour we're avoiding. The body
+// carries the /auth/start link as a separate "auth_url" field so a client
+// that can't parse the message text still gets the URL.
+func writeMCPAuthError(w http.ResponseWriter, r *http.Request, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, "{%q: %q}\n", "error", msg)
+	fmt.Fprintf(w, "{%q: %q, %q: %q}\n", "error", msg, "auth_url", authURL(r))
 }
 
 // --- MCP tools --------------------------------------------------------

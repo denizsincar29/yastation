@@ -347,9 +347,10 @@ type commandRequest struct {
 }
 
 type commandResponse struct {
-	OK     bool   `json:"ok"`
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	OK      bool   `json:"ok"`
+	Output  string `json:"output,omitempty"`
+	Error   string `json:"error,omitempty"`
+	AuthURL string `json:"auth_url,omitempty"`
 }
 
 func handleCommand(defaultApp *app.App, tokenClients *tokenClientCache, defaultsCfg, customCfg *app.CustomCommandConfig, loadAccess func() *access.List) http.HandlerFunc {
@@ -396,7 +397,7 @@ func runOnAccount(w http.ResponseWriter, r *http.Request, defaultApp *app.App, t
 	if xToken := r.Header.Get("X-Yandex-Token"); xToken != "" {
 		client, _, err := tokenClients.get(xToken, loadAccess())
 		if err != nil {
-			writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
+			writeJSON(w, statusForTokenError(err), tokenErrorResponse(err, r))
 			return
 		}
 		tmpApp := buildApp(client, defaultsCfg, customCfg)
@@ -411,7 +412,10 @@ func runOnAccount(w http.ResponseWriter, r *http.Request, defaultApp *app.App, t
 	}
 
 	if defaultApp == nil {
-		writeJSON(w, http.StatusUnauthorized, commandResponse{Error: "сервер запущен без своего аккаунта (BYOT по умолчанию) — передайте свой X-Yandex-Token"})
+		writeJSON(w, http.StatusUnauthorized, commandResponse{
+			Error:   "сервер запущен без своего аккаунта (BYOT по умолчанию) — передайте свой X-Yandex-Token (получить: " + authURL(r) + ")",
+			AuthURL: authURL(r),
+		})
 		return
 	}
 	out, err := run(ctx, defaultApp)
@@ -432,6 +436,21 @@ func statusForTokenError(err error) int {
 		return http.StatusForbidden
 	}
 	return http.StatusUnauthorized
+}
+
+// tokenErrorResponse builds the commandResponse for a failed
+// tokenClientCache.get: for an account that's merely not on the allowlist
+// the message stands on its own (re-authing won't change the uid); for a
+// bad/expired token it appends the /auth/start re-auth link — the actual
+// fix — and also exposes it as a separate "auth_url" field, mirroring
+// MCP's writeMCPAuthError.
+func tokenErrorResponse(err error, r *http.Request) commandResponse {
+	resp := commandResponse{Error: err.Error()}
+	if statusForTokenError(err) != http.StatusForbidden {
+		resp.Error += " " + reauthHint(r)
+		resp.AuthURL = authURL(r)
+	}
+	return resp
 }
 
 // handleCommandByName is the primary way to run a command over HTTP:
@@ -592,12 +611,15 @@ func handleStations(tokenClients *tokenClientCache, loadAccess func() *access.Li
 	return func(w http.ResponseWriter, r *http.Request) {
 		xToken := r.Header.Get("X-Yandex-Token")
 		if xToken == "" {
-			writeJSON(w, http.StatusBadRequest, commandResponse{Error: "нужен заголовок X-Yandex-Token"})
+			writeJSON(w, http.StatusBadRequest, commandResponse{
+				Error:   "нужен заголовок X-Yandex-Token (получить: " + authURL(r) + ")",
+				AuthURL: authURL(r),
+			})
 			return
 		}
 		client, _, err := tokenClients.get(xToken, loadAccess())
 		if err != nil {
-			writeJSON(w, statusForTokenError(err), commandResponse{Error: err.Error()})
+			writeJSON(w, statusForTokenError(err), tokenErrorResponse(err, r))
 			return
 		}
 		out := make([]stationJSON, 0, len(client.Speakers))
