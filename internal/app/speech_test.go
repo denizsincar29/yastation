@@ -369,6 +369,40 @@ func TestSplitChunksCutsAtLastPeriod(t *testing.T) {
 	}
 }
 
+func TestSplitChunksPeriodBeforeNewlineIsBoundary(t *testing.T) {
+	// The article extractor joins paragraphs with "\n", so a period at
+	// the end of a paragraph is followed by a newline, not a space — it
+	// must still count as a sentence boundary, or a long paragraph gets
+	// cut mid-sentence at a comma instead.
+	head := strings.Repeat("a", 80) + " конец.\n"
+	tail := strings.Repeat("b", quasar.MaxTTSChunkChars)
+	got := splitChunks(head+tail, quasar.MaxTTSChunkChars)
+	if len(got) < 2 {
+		t.Fatalf("got=%q", got)
+	}
+	if !strings.Contains(got[0], "конец.") {
+		t.Fatalf("first chunk should end at the period: %q", got[0])
+	}
+	if !strings.HasPrefix(got[1], "b") {
+		t.Fatalf("second chunk should start with the tail: %q", got[1])
+	}
+}
+
+func TestSplitChunksQuoteAfterPeriodKeepsBoundary(t *testing.T) {
+	// «предложение.» — the dot sits before a closing quote, then a space;
+	// the boundary must survive the quote so the whole quoted sentence
+	// stays in one chunk.
+	head := strings.Repeat("a", 40) + " сказал: «Привет.»\n"
+	tail := strings.Repeat("b", quasar.MaxTTSChunkChars)
+	got := splitChunks(head+tail, quasar.MaxTTSChunkChars)
+	if len(got) < 2 {
+		t.Fatalf("got=%q", got)
+	}
+	if !strings.Contains(got[0], "«Привет.»") {
+		t.Fatalf("first chunk should include the quoted sentence: %q", got[0])
+	}
+}
+
 func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 	// The "." inside "3.5" isn't followed by a space, so it must not be
 	// taken for a sentence end and split the number apart.

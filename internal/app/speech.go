@@ -331,10 +331,25 @@ func bestCut(runes []rune, start, end int) int {
 		if !isSentenceEnd(runes[i]) {
 			continue
 		}
-		if i+1 < len(runes) && runes[i+1] != ' ' {
+		// The ender is a real sentence boundary if what follows is
+		// whitespace or the end of the text — skipping any trailing
+		// closing quote/paren, so «слово.» and (текст.) still count.
+		// A literal "3.5" isn't: after the dot comes a digit, not
+		// whitespace. Whitespace, not just " ", because the article
+		// extractor joins paragraphs with "\n" — a period at the end
+		// of a paragraph is followed by a newline, and dropping those
+		// was cutting sentences at commas instead.
+		j := i + 1
+		for j < len(runes) && isClosingRune(runes[j]) {
+			j++
+		}
+		if j < len(runes) && !isWhitespace(runes[j]) {
 			continue
 		}
-		return i + 1
+		if j > end {
+			j = end
+		}
+		return j
 	}
 	for i := end - 1; i >= start; i-- {
 		switch runes[i] {
@@ -353,6 +368,25 @@ func bestCut(runes []rune, start, end int) int {
 func isSentenceEnd(r rune) bool {
 	switch r {
 	case '.', '!', '?', '…':
+		return true
+	}
+	return false
+}
+
+// isClosingRune reports whether r can sit between a sentence ender and the
+// following whitespace without breaking the boundary — closing quotes and
+// brackets, which in prose attach to the word before them («слово.»).
+func isClosingRune(r rune) bool {
+	switch r {
+	case '»', '"', '\'', ')', ']', '}':
+		return true
+	}
+	return false
+}
+
+func isWhitespace(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\r':
 		return true
 	}
 	return false
