@@ -88,23 +88,6 @@ if $USE_DEFAULT_ACCOUNT; then
 fi
 
 echo ""
-bold "── Токен доступа к самому HTTP API ──────────────────────────────"
-echo "YASTATION_HTTP_TOKEN — это НЕ токен Яндекс-аккаунта и не имеет к нему"
-echo "отношения (тот, из BYOT, передаётся отдельно заголовком X-Yandex-Token"
-echo "на каждый запрос). Это просто ключ, которым сам сервер закрыт от"
-echo "посторонних: клиент обязан слать 'Authorization: Bearer <этот токен>',"
-echo "иначе получает 401 — даже в BYOT-режиме, иначе кто угодно из интернета"
-echo "сможет дёргать /command чужими токенами через твой сервер."
-if command -v openssl >/dev/null 2>&1; then
-  DEFAULT_HTTP_TOKEN="$(openssl rand -hex 32)"
-else
-  DEFAULT_HTTP_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-fi
-echo "Сгенерирован случайный — просто нажми Enter, чтобы использовать его,"
-echo "или впиши свой."
-ask HTTP_TOKEN "YASTATION_HTTP_TOKEN" "${DEFAULT_HTTP_TOKEN}"
-
-echo ""
 read -rp "Подключить свои команды из examples/commands.json? [y/N]: " use_custom
 
 # ── .env ────────────────────────────────────────────────────────
@@ -121,7 +104,6 @@ if $WRITE_ENV; then
     echo "# yastation-server — сгенерировано scripts/setup_server.sh"
     echo "# $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     echo "YASTATION_HTTP_ADDR=:${PORT}"
-    echo "YASTATION_HTTP_TOKEN=${HTTP_TOKEN}"
     if $USE_DEFAULT_ACCOUNT; then
       echo "YASTATION_USE_DEFAULT_ACCOUNT=1"
       echo "YASTATION_TOKEN_FILE=${TOKEN_FILE}"
@@ -139,7 +121,6 @@ else
   source "${ENV_FILE}"
   set +a
   PORT="${YASTATION_HTTP_ADDR#*:}"
-  HTTP_TOKEN="${YASTATION_HTTP_TOKEN}"
   [[ -n "${YASTATION_USE_DEFAULT_ACCOUNT:-}" ]] && USE_DEFAULT_ACCOUNT=true
   TOKEN_FILE="${YASTATION_TOKEN_FILE:-${HOME}/.config/yastation/tokens.json}"
 fi
@@ -235,7 +216,7 @@ fi
 echo ""
 bold "── Проверка ───────────────────────────────────────────────────"
 echo "  curl -X POST localhost:${PORT}/command \\"
-echo "    -H \"Authorization: Bearer ${HTTP_TOKEN}\" \\"
+echo "    -H \"X-Yandex-Token: <свой x-token>\" \\"
 echo "    -d '{\"text\": \"привет с сервера\"}'"
 
 if [[ -n "${DOMAIN}" ]]; then

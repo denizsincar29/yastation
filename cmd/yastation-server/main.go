@@ -22,7 +22,7 @@
 // vs CallNamed). Same story for MCP: every tool in mcp.go takes its own
 // named, typed parameters instead of a single line-based escape hatch.
 //
-// Two auth modes:
+// Auth:
 //   - "Bring your own token" (default): a request carrying an
 //     X-Yandex-Token header runs against *that* Yandex account — but
 //     only if that account's uid is on the allowlist (see
@@ -38,24 +38,19 @@
 //     server also keeps its own pre-authenticated account (from
 //     yastation-auth) and uses it for any request that doesn't carry
 //     X-Yandex-Token. Not allowlist-gated — it's the server's own
-//     account, trusted by definition; gated by YASTATION_HTTP_TOKEN like
-//     everything else.
+//     account, trusted by definition. This mode answers requests from
+//     anyone who can reach the server, so keep it behind a firewall/VPN
+//     or a reverse proxy with its own access control.
 //
-// The auth modes above are about *whose Yandex account* a request runs
-// against. That's orthogonal to YASTATION_HTTP_TOKEN, which is this
-// server's own API key (checked via "Authorization: Bearer ...") so
-// random callers can't hit your HTTP endpoint at all. It's optional (the
-// server logs a warning and runs open without it) — with the allowlist
-// in place, an unauthenticated stranger sending a valid X-Yandex-Token
-// for an account that isn't on the list gets rejected regardless, so
-// YASTATION_HTTP_TOKEN is defense-in-depth rather than the only thing
-// standing between your server and abuse.
+// Every request must therefore carry a valid X-Yandex-Token (with the
+// exception of the /auth/* browser flow) or fall through to the default
+// account if one is configured. There is no separate HTTP API key: the
+// allowlist is what stops random callers from driving the server.
 //
 // Besides the REST endpoints above, POST/GET /mcp on the same port
 // speaks MCP (Streamable HTTP) — same X-Yandex-Token/X-Station headers,
-// same allowlist, same optional default-account fallback, same
-// YASTATION_HTTP_TOKEN gate; see mcp.go. One process, one port, no
-// separate server to run just for MCP.
+// same allowlist, same optional default-account fallback; see mcp.go.
+// One process, one port, no separate server to run just for MCP.
 //
 // `-stdio` is a third, unrelated mode: skips HTTP entirely and serves
 // MCP over stdin/stdout for a single already-authenticated local
@@ -67,7 +62,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -119,11 +113,6 @@ func main() {
 
 func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	addr := envOr("YASTATION_HTTP_ADDR", ":8737")
-	token := os.Getenv("YASTATION_HTTP_TOKEN")
-	if token == "" {
-		log.Println("ВНИМАНИЕ: YASTATION_HTTP_TOKEN не задан — сервер принимает запросы без авторизации.")
-		log.Println("(это НЕ токен твоего Яндекс-аккаунта — это отдельный ключ для доступа к самому этому HTTP API)")
-	}
 
 	if legacy := os.Getenv("YASTATION_BYOT_ONLY"); legacy != "" {
 		log.Println("YASTATION_BYOT_ONLY больше не нужен — сервер теперь и так BYOT по умолчанию.")
@@ -151,7 +140,7 @@ func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	// X-Yandex-Token. Set this to also keep a default account (from
 	// yastation-auth) for requests that don't carry one — used by both
 	// the REST endpoints below (see runOnAccount) and /mcp (see
-	// withYandexAuth in mcp.go).
+	// mcpAccountMiddleware in mcp.go).
 	useDefaultAccount := os.Getenv("YASTATION_USE_DEFAULT_ACCOUNT") != ""
 
 	var defaultApp *app.App
@@ -190,7 +179,7 @@ func runHTTP(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	mux.HandleFunc("GET /auth/start", handleAuthStart(authStore))
 	mux.HandleFunc("GET /auth/result", handleAuthResult(authStore))
 
-	handler := withAuth(token, withLogging(mux))
+	handler := withLogging(mux)
 
 	log.Println("Слушаю на", addr, "— REST: /command, /commands; MCP (Streamable HTTP): /mcp; браузер: /auth/start")
 	log.Fatal(http.ListenAndServe(addr, handler))
@@ -322,33 +311,6 @@ func (c *tokenClientCache) sweepLocked() {
 }
 
 // --- middleware -------------------------------------------------------
-
-func withAuth(token string, next http.Handler) http.Handler {
-	if token == "" {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		got := r.Header.Get("Authorization")
-		// /auth/start and /auth/result are meant to be opened by hand in
-		// a plain browser tab, which can't set custom headers on a normal
-		// navigation — accept ?token=... there too, alongside the header.
-		if got == "" && strings.HasPrefix(r.URL.Path, "/auth/") {
-			if q := r.URL.Query().Get("token"); q != "" {
-				got = "Bearer " + q
-			}
-		}
-		want := "Bearer " + token
-		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-			http.Error(w, `{"ok":false,"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
 
 func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

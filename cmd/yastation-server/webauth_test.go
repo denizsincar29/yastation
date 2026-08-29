@@ -159,35 +159,3 @@ func TestHandleAuthResultUnknownID(t *testing.T) {
 		t.Fatalf("expected a link back to /auth/start, got: %s", rec.Body.String())
 	}
 }
-
-// TestWithAuthAcceptsQueryTokenOnlyForAuthPaths checks the plain-browser
-// carve-out in withAuth: ?token=... works for /auth/*, but not for other
-// protected routes (those still need the Authorization header, same as
-// before).
-func TestWithAuthAcceptsQueryTokenOnlyForAuthPaths(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	handler := withAuth("secret", inner)
-
-	req := httptest.NewRequest(http.MethodGet, "/auth/start?token=secret", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ?token= to work on /auth/start, got %d", rec.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/auth/start?token=wrong", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected a wrong ?token= to still be rejected, got %d", rec.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/command?token=secret", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected ?token= to NOT work outside /auth/*, got %d", rec.Code)
-	}
-}

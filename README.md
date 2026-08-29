@@ -207,7 +207,6 @@ Device id колонки видно в выводе `/stations`. Если хос
 из ИИ через MCP (`/mcp` на том же порту, см. "MCP" ниже):
 
 ```bash
-export YASTATION_HTTP_TOKEN=секрет   # опционально, но нужен если сервер смотрит наружу
 go run ./cmd/yastation-server
 ```
 
@@ -222,17 +221,23 @@ go run ./cmd/yastation-server
 
 ```bash
 curl -X POST localhost:8737/command \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
+  -H "X-Yandex-Token: <свой x-token>" \
   -H "Content-Type: application/json" \
   -d '{"text": "привет с сервера"}'
 
 curl -X POST localhost:8737/commands/volume \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
+  -H "X-Yandex-Token: <свой x-token>" \
   -d '{"level": "3"}'
 
-curl localhost:8737/schedules -H "Authorization: Bearer $YASTATION_HTTP_TOKEN"
+curl localhost:8737/schedules -H "X-Yandex-Token: <свой x-token>"
 curl localhost:8737/healthz   # без авторизации, для мониторинга
 ```
+
+Отдельного HTTP-секрета у сервера больше нет — авторизация только по
+`X-Yandex-Token` (см. ниже). Если у сервера есть свой аккаунт по
+умолчанию (`YASTATION_USE_DEFAULT_ACCOUNT=1`), заголовок можно не слать —
+но учти, что тогда команды доступны любому, кто достучался до сервера
+(см. «Безопасность»).
 
 Тело запроса `/command` — простая форма для TTS/голосовой команды:
 - `{"text": "привет", "station": "Кухня"}` — короткая форма, TTS;
@@ -262,15 +267,15 @@ curl localhost:8737/commands   # список всех команд + их по�
 
 ```bash
 curl -X POST localhost:8737/commands/timer \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
+  -H "X-Yandex-Token: <свой x-token>" \
   -d '{"minutes": "10", "label": "проверить духовку", "station": "Кухня"}'
 
 curl -X POST localhost:8737/commands/say \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
+  -H "X-Yandex-Token: <свой x-token>" \
   -d '{"text": "привет с сервера", "station": "Кухня"}'
 
 curl -X POST localhost:8737/commands/scenario \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
+  -H "X-Yandex-Token: <свой x-token>" \
   -d '{"name": "Вечер"}'
 ```
 
@@ -300,13 +305,11 @@ go run ./cmd/yastation-access add Мама
 
 # узнать id/имена станций на том аккаунте
 curl localhost:8737/stations \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
   -H "X-Yandex-Token: <мамин x-token>"
 # -> [{"id":"...","name":"Кухня","house_name":"Дом","platform":"yandexstation_2"}]
 
 # затем команда на конкретную станцию по её id или имени
 curl -X POST localhost:8737/command \
-  -H "Authorization: Bearer $YASTATION_HTTP_TOKEN" \
   -H "X-Yandex-Token: <мамин x-token>" \
   -H "X-Station: Кухня" \
   -d '{"text": "мама, не забудь лекарство"}'
@@ -341,11 +344,13 @@ go run ./cmd/yastation-access remove <uid|логин|имя>  # отозвать
 ещё "тёплый" в 20-минутном кэше сервера — список допуска перечитывается
 на каждый запрос.
 
-`Authorization: Bearer` (если задан `YASTATION_HTTP_TOKEN`) — это доступ
-к твоему серверу вообще, отдельно от `X-Yandex-Token`/списка допуска,
-которые выбирают **чей** аккаунт Яндекса дёргать и разрешено ли это
-вообще. Про то, что такое x-token, откуда его взять и насколько это
-вообще безопасная идея — раздел "Безопасность" ниже.
+Отдельного HTTP-секрета у сервера нет: `YASTATION_HTTP_TOKEN`/
+`Authorization: Bearer` удалены, доступ определяется только
+`X-Yandex-Token` и списком допуска (а для запросов без токена — ещё и
+тем, есть ли у сервера аккаунт по умолчанию и дотянулся ли до него
+злоумышленник, см. «Безопасность»). Про то, что такое x-token, откуда
+его взять и насколько это вообще безопасная идея — раздел "Безопасность"
+ниже.
 
 Клиенты для чужих токенов кэшируются в памяти 20 минут (не логируется и
 не хранится сам токен — только его sha256 в качестве ключа кэша), чтобы
@@ -363,8 +368,7 @@ go run ./cmd/yastation-access remove <uid|логин|имя>  # отозвать
 Авторизация **буквально та же самая**, что у `/command` (см. "Bring
 your own token" выше) — то же самое правило выбора аккаунта
 (`X-Yandex-Token` → список допуска, иначе аккаунт сервера по умолчанию,
-если `YASTATION_USE_DEFAULT_ACCOUNT=1`, иначе 401), тот же кэш клиентов,
-тот же `YASTATION_HTTP_TOKEN`:
+если `YASTATION_USE_DEFAULT_ACCOUNT=1`, иначе 401), тот же кэш клиентов:
 
 - `X-Yandex-Token` — свой (или доверенного человека) Yandex OAuth-токен.
   Если не передан и у сервера есть свой аккаунт по умолчанию —
@@ -425,17 +429,16 @@ OAuth (никакой MCP-клиент не подключится через э
 
 Ничего не пишет на диск и не трогает `tokens.json`/`access.json`
 сервера — только показывает токен один раз, в памяти процесса, и
-забывает его сама через 10 минут. Если задан `YASTATION_HTTP_TOKEN` —
-роуты `/auth/*` тоже под ним, но так как обычная навигация браузера не
-умеет ставить заголовки, для них дополнительно принимается
-`?token=...` в самом URL (например `/auth/start?token=секрет`) —
-только для `/auth/*`, остальные эндпоинты как были, через заголовок.
+забывает его сама через 10 минут. Роуты `/auth/*` открыты без всякого
+токена — это намеренно: сюда ходит человек с браузером, а не
+API-клиент. Они не дают доступа к командам (их по-прежнему защищает
+`X-Yandex-Token`/список допуска), а лишь показывают свежий x-token
+тому, кто прямо сейчас подтвердит вход в Яндексе.
 
 #### Подключение как удалённый коннектор (HTTP)
 
 Способ зависит от конкретного ИИ-клиента/хоста. Важно: заголовки
-(`X-Yandex-Token`, при необходимости `Authorization: Bearer` для
-`YASTATION_HTTP_TOKEN`) нужно прописать **в конфиге клиента статически** —
+(`X-Yandex-Token`) нужно прописать **в конфиге клиента статически** —
 если оставить сервер без заголовков, многие MCP-клиенты (VS Code, Cursor
 и т.п.) на первый же `403` попытаются сами угадать OAuth-эндпоинты
 (`/authorize` и т.д.) на этом же домене по спеке MCP Authorization — а
@@ -534,8 +537,8 @@ go build -o yastation-server.exe ./cmd/yastation-server
 
 После сохранения файла — полный перезапуск Claude Desktop (не просто
 новое окно). `-stdio` и обычный HTTP-режим — взаимоисключающие: с флагом
-сервер вообще не открывает порт, `YASTATION_HTTP_ADDR`/`_TOKEN` в этом
-режиме не участвуют.
+сервер вообще не открывает порт, `YASTATION_HTTP_ADDR` в этом
+режиме не участвует.
 
 ### Python-клиент
 
@@ -546,12 +549,12 @@ API, без внешних зависимостей (только stdlib, `urlli
 ```python
 from yastation_client import YastationClient
 
-client = YastationClient("http://localhost:8737", server_token="секрет")
+client = YastationClient("http://localhost:8737")
 client.say("привет с питона")
 client.command("/volume 3")
 
 # bring-your-own-token: колонка другого аккаунта
-mom = YastationClient("http://localhost:8737", server_token="секрет", yandex_token="мамин x-token")
+mom = YastationClient("http://localhost:8737", yandex_token="мамин x-token")
 for station in mom.stations():
     print(station.id, station.name)
 mom.say("не забудь лекарство", station="Кухня")
@@ -569,8 +572,7 @@ bash scripts/setup_server.sh
 Полностью интерактивно, sudo не нужен снаружи (вызывается изнутри
 только на шаге установки systemd-юнита). Спросит порт (если занят —
 сам возьмёт следующий свободный), поддомен для Caddy, путь к файлу
-токенов, токен для API (можно сгенерированный по умолчанию, можно
-свой), нужно ли подключить `examples/commands.json`. Пользователь для
+токенов, нужно ли подключить `examples/commands.json`. Пользователь для
 сервиса берётся автоматически (`whoami`/`$SUDO_USER`) — отдельно
 указывать не надо. Дальше: собирает `yastation-server` в `bin/` внутри
 репозитория, пишет `.env` в корень репы (права 600), предложит пройти

@@ -189,58 +189,6 @@ func TestTokenClientCacheGetRevokesEvenWithWarmCache(t *testing.T) {
 	}
 }
 
-// --- middleware --------------------------------------------------------
-
-func TestWithAuthRejectsMissingOrWrongToken(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := withAuth("secret", inner)
-
-	req := httptest.NewRequest(http.MethodGet, "/command", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("no token: got %d", rec.Code)
-	}
-
-	req.Header.Set("Authorization", "Bearer wrong")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong token: got %d", rec.Code)
-	}
-
-	req.Header.Set("Authorization", "Bearer secret")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("correct token: got %d", rec.Code)
-	}
-}
-
-func TestWithAuthAlwaysAllowsHealthz(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := withAuth("secret", inner)
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d", rec.Code)
-	}
-}
-
-func TestWithAuthNoTokenConfiguredAllowsEverything(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := withAuth("", inner)
-
-	req := httptest.NewRequest(http.MethodGet, "/command", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d", rec.Code)
-	}
-}
-
 // --- handlers ------------------------------------------------------------
 
 func emptyAccessList() *access.List { return &access.List{} }

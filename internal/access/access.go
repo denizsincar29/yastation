@@ -1,11 +1,9 @@
 // Package access is a small allowlist of Yandex accounts (by uid, see
 // quasar.WhoAmI) permitted to use yastation-server's bring-your-own-token
-// mode. It replaces the old model of one shared YASTATION_HTTP_TOKEN
-// bearer secret for everyone with per-person, revocable entries: instead
-// of "knows the secret", access means "this specific Yandex account is on
-// the list" — add/remove one person without touching anyone else's
-// access, and the list is just a JSON file naming real accounts, not an
-// opaque token you have to remember to rotate.
+// mode. Instead of "knows a shared server secret", access means "this
+// specific Yandex account is on the list" — add/remove one person without
+// touching anyone else's access, and the list is just a JSON file naming
+// real accounts, not an opaque token you have to remember to rotate.
 //
 // The file only ever stores identity (uid + a human-readable label,
 // see quasar.Identity) — never anyone's actual OAuth token. Whoever's

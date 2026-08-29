@@ -6,8 +6,7 @@
 //   - POST/GET /mcp, mounted on the same mux/port as /command — see
 //     mcpRoute, wired up from runHTTP in main.go. Same X-Yandex-Token/
 //     X-Station headers, same access.json allowlist, same optional
-//     default-account fallback, same YASTATION_HTTP_TOKEN gate as
-//     everything else on this server.
+//     default-account fallback as everything else on this server.
 //   - `-stdio` (see runStdio, called from main() before runHTTP even
 //     starts): a completely separate local mode with no HTTP at all —
 //     MCP over stdin/stdout for whichever account is already logged in
@@ -42,7 +41,7 @@ import (
 // the shape Claude Desktop (and most other local MCP hosts) expect for
 // a "command"+"args" entry. All log output goes to stderr (Go's log
 // package default), keeping stdout clean for MCP JSON-RPC. No HTTP,
-// no YASTATION_HTTP_TOKEN, no access.json — it's just you, locally.
+// no access.json — it's just you, locally.
 func runStdio(defaultsCfg, customCfg *app.CustomCommandConfig) {
 	client, err := quasar.Connect()
 	if err != nil {

@@ -7,7 +7,6 @@
 
 Переменные окружения для примера в конце файла:
     YASTATION_URL          адрес сервера, по умолчанию http://localhost:8737
-    YASTATION_HTTP_TOKEN   Bearer-токен сервера (если сервер его требует)
     MOM_YANDEX_TOKEN       опционально — x-token другого аккаунта для
                             демонстрации bring-your-own-token режима
 """
@@ -36,9 +35,6 @@ class YastationClient:
     """Клиент к HTTP API yastation-server (см. README проекта, раздел
     "HTTP-бэкенд").
 
-    server_token — Bearer-токен ЭТОГО сервера (YASTATION_HTTP_TOKEN),
-        нужен если сервер настроен требовать авторизацию. Не путать с
-        yandex_token.
     yandex_token — режим "bring your own token": выполнять команды от
         имени конкретного аккаунта Яндекса (заголовок X-Yandex-Token),
         а не от аккаунта, под которым авторизован сам сервер. Нужен для
@@ -49,12 +45,10 @@ class YastationClient:
     def __init__(
         self,
         base_url: str,
-        server_token: Optional[str] = None,
         yandex_token: Optional[str] = None,
         timeout: float = 15.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.server_token = server_token
         self.yandex_token = yandex_token
         self.timeout = timeout
 
@@ -62,8 +56,6 @@ class YastationClient:
 
     def _headers(self, extra: Optional[dict] = None) -> dict:
         headers = {"Content-Type": "application/json"}
-        if self.server_token:
-            headers["Authorization"] = f"Bearer {self.server_token}"
         if self.yandex_token:
             headers["X-Yandex-Token"] = self.yandex_token
         if extra:
@@ -157,7 +149,6 @@ if __name__ == "__main__":
 
     client = YastationClient(
         base_url=os.environ.get("YASTATION_URL", "http://localhost:8737"),
-        server_token=os.environ.get("YASTATION_HTTP_TOKEN"),
     )
 
     if not client.healthy():
@@ -178,7 +169,6 @@ if __name__ == "__main__":
     if mom_token:
         mom_client = YastationClient(
             base_url=client.base_url,
-            server_token=client.server_token,
             yandex_token=mom_token,
         )
         for station in mom_client.stations():
