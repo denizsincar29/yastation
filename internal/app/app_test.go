@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
 func newTestApp() (*App, *fakeStation) {
@@ -513,7 +515,15 @@ func TestBatchSplitsLongPhrases(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("calls=%v", calls)
 	}
-	want := "batch::say:" + strings.Repeat("а", 128) + ";say:" + strings.Repeat("а", 128) + ";say:" + strings.Repeat("а", 44)
+	var chunks []string
+	for n := 300; n > 0; n -= quasar.MaxTTSChunkChars {
+		chunk := n
+		if chunk > quasar.MaxTTSChunkChars {
+			chunk = quasar.MaxTTSChunkChars
+		}
+		chunks = append(chunks, "say:"+strings.Repeat("а", chunk))
+	}
+	want := "batch::" + strings.Join(chunks, ";")
 	if calls[0] != want {
 		t.Fatalf("call=%q want=%q", calls[0], want)
 	}

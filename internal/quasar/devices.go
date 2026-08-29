@@ -202,11 +202,13 @@ func buildTTSScenario(name string, dev Device, text string) Scenario {
 }
 
 // MaxTTSChunkChars caps a single tts phrase inside a cloud scenario. The
-// exact Yandex limit is undocumented and differs by report — 128 is a safe,
-// changeable ceiling. Longer text is split before batching (see
-// internal/app.splitSpeech), so this is the one knob to turn if a phrase
-// ever fails to play because it's too long.
-const MaxTTSChunkChars = 128
+// limit is measured live, not guessed: Yandex rejects a tts step longer
+// than 100 symbols with QUASAR_SERVER_ACTION_LENGTH_ERROR ("Команда Алисе
+// должна быть не длиннее 100 символов"). 96 leaves a small margin.
+// Longer text is split before batching (see internal/app.splitSpeech), so
+// this is the one knob to turn if a phrase ever fails to play because it's
+// too long.
+const MaxTTSChunkChars = 96
 
 // buildBatchScenario is a scenario that runs several capabilities on one
 // device back to back — the batching mechanism Client.Batch uses. Each

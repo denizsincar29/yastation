@@ -208,11 +208,11 @@ func TestSplitSpeechDropsEmptyPipeParts(t *testing.T) {
 }
 
 func TestSplitChunksCutsAtLastPeriod(t *testing.T) {
-	// "Hello world." ends at rune 12 (< 128); the rest has no boundary
-	// before the cap, so the cut lands right after the period.
-	text := "Hello world. " + strings.Repeat("x", 120)
+	// "Hello world." ends well before the cap; the x-tail has no boundary,
+	// so the cut lands right after the period.
+	text := "Hello world. " + strings.Repeat("x", quasar.MaxTTSChunkChars)
 	got := splitSpeech(text)
-	want := []string{"Hello world.", strings.Repeat("x", 120)}
+	want := []string{"Hello world.", strings.Repeat("x", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
 	}
@@ -221,7 +221,7 @@ func TestSplitChunksCutsAtLastPeriod(t *testing.T) {
 func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 	// The "." inside "3.5" isn't followed by a space, so it must not be
 	// taken for a sentence end and split the number apart.
-	text := strings.Repeat("a", 100) + " 3.5 " + strings.Repeat("b", 100)
+	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + " 3.5 " + strings.Repeat("b", quasar.MaxTTSChunkChars)
 	got := splitSpeech(text)
 	if len(got) != 2 {
 		t.Fatalf("got=%q", got)
@@ -232,18 +232,18 @@ func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 }
 
 func TestSplitChunksCutsAtLastCommaWhenNoPeriod(t *testing.T) {
-	text := strings.Repeat("a", 100) + ", " + strings.Repeat("b", 100)
+	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ", " + strings.Repeat("b", quasar.MaxTTSChunkChars)
 	got := splitSpeech(text)
-	want := []string{strings.Repeat("a", 100) + ",", strings.Repeat("b", 100)}
+	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ",", strings.Repeat("b", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
 	}
 }
 
 func TestSplitChunksCutsAtLastSpaceWhenNoPunctuation(t *testing.T) {
-	text := strings.Repeat("a", 100) + " " + strings.Repeat("b", 100)
+	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + " " + strings.Repeat("b", quasar.MaxTTSChunkChars)
 	got := splitSpeech(text)
-	want := []string{strings.Repeat("a", 100), strings.Repeat("b", 100)}
+	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10), strings.Repeat("b", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
 	}
@@ -252,12 +252,15 @@ func TestSplitChunksCutsAtLastSpaceWhenNoPunctuation(t *testing.T) {
 func TestSplitChunksHardSplitsSingleLongWord(t *testing.T) {
 	text := strings.Repeat("a", 300)
 	got := splitSpeech(text)
-	want := []string{
-		strings.Repeat("a", quasar.MaxTTSChunkChars),
-		strings.Repeat("a", quasar.MaxTTSChunkChars),
-		strings.Repeat("a", 300-2*quasar.MaxTTSChunkChars),
+	var want []string
+	for n := 300; n > 0; n -= quasar.MaxTTSChunkChars {
+		chunk := n
+		if chunk > quasar.MaxTTSChunkChars {
+			chunk = quasar.MaxTTSChunkChars
+		}
+		want = append(want, strings.Repeat("a", chunk))
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got=%q", got)
+		t.Fatalf("got=%q want=%q", got, want)
 	}
 }
