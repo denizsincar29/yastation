@@ -311,7 +311,26 @@ func TestSplitHeadingsPlainProse(t *testing.T) {
 
 func TestSplitHeadingsSplitsOnHeadingsAndStripsMarks(t *testing.T) {
 	got := splitHeadings("# Введение\nПервая часть.\n## Раздел\nВторая часть.")
-	want := []string{"Введение\nПервая часть.", "Раздел\nВторая часть."}
+	want := []string{"Введение. Первая часть.", "Раздел. Вторая часть."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitHeadingsPlainProseKeepsNewlines(t *testing.T) {
+	// A section without a heading is joined on "\n" as before — no ". "
+	// injection into plain prose.
+	got := splitHeadings("Первый абзац.\n# Заголовок\nТекст.")
+	want := []string{"Первый абзац.", "Заголовок. Текст."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitHeadingsHeadingAlone(t *testing.T) {
+	// A heading with no body stays just the title, no dangling ". ".
+	got := splitHeadings("# Заголовок\n## Пусто")
+	want := []string{"Заголовок", "Пусто"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
 	}
@@ -333,8 +352,8 @@ func TestBatchActionsHeadingStartsNewChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []quasar.BatchAction{
-		{Kind: "say", Text: "Настройка\nКороткая секция."},
-		{Kind: "say", Text: "Совет\nЕщё одна."},
+		{Kind: "say", Text: "Настройка. Короткая секция."},
+		{Kind: "say", Text: "Совет. Ещё одна."},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%+v", got)
@@ -419,8 +438,38 @@ func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 func TestSplitChunksCutsAtLastCommaWhenNoPeriod(t *testing.T) {
 	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ", " + strings.Repeat("b", quasar.MaxTTSChunkChars)
 	got := splitChunks(text, quasar.MaxTTSChunkChars)
-	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ",", strings.Repeat("b", quasar.MaxTTSChunkChars)}
+	// The cut comma is rewritten to "?" so the chunk doesn't trail off.
+	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10) + "?", strings.Repeat("b", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitChunksCommaBeforeNoPreferred(t *testing.T) {
+	// An ordinary comma sits closer to the end of the window than the comma
+	// before "но", but the clause boundary must win — a complex sentence
+	// «А, но Б» splits at its turning point.
+	text := strings.Repeat("а", 40) + ", но что-то, ещё" + strings.Repeat("б", 200)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
+	if len(got) < 2 {
+		t.Fatalf("got=%q", got)
+	}
+	if !strings.HasPrefix(got[1], "но") {
+		t.Fatalf("should cut at the comma before \"но\", not the later ordinary comma: %q", got)
+	}
+	if got[0] != strings.Repeat("а", 40)+"?" {
+		t.Fatalf("cut chunk should end with \"?\": %q", got[0])
+	}
+}
+
+func TestFixTrailingCommaReplacesWithQuestion(t *testing.T) {
+	if got := fixTrailingComma("привет,"); got != "привет"+chunkEndCommaMark {
+		t.Fatalf("got=%q", got)
+	}
+	if got := fixTrailingComma("привет"); got != "привет" {
+		t.Fatalf("got=%q", got)
+	}
+	if got := fixTrailingComma(""); got != "" {
 		t.Fatalf("got=%q", got)
 	}
 }

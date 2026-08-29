@@ -690,7 +690,7 @@ func TestReadCommandFetchesAndReadsAloud(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected one Batch call, got %v", calls)
 	}
-	want := "cmd:останови;say:Заголовок: Настройка радио;say:Настройка\nКороткая секция.;say:Совет\nЕщё одна.;cmd:продолжить"
+	want := "cmd:останови;say:Заголовок: Настройка радио;say:Настройка. Короткая секция.;say:Совет. Ещё одна.;cmd:продолжить"
 	if calls[0] != "batch::"+want {
 		t.Fatalf("batch call:\n got %q\nwant %q", calls[0], "batch::"+want)
 	}

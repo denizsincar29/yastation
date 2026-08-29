@@ -180,21 +180,30 @@ func batchActions(text string) ([]quasar.BatchAction, error) {
 // start of a line) into sections. Every piece after the first begins where a
 // heading started, and the "#" marks are stripped so Alice reads the section
 // title, not the syntax — an article's sections become its own chunks
-// instead of one wall of text. Prose with no headings comes back as a single
-// piece.
+// instead of one wall of text. When a section carries a heading and body in
+// the same piece, the heading is joined to the body with ". " rather than a
+// newline — a bare "\n" reads as a plain space, so without the period the
+// title runs straight into the text as one long phrase. Prose with no
+// headings comes back as a single piece.
 func splitHeadings(text string) []string {
 	var segs []string
 	var cur []string
+	headed := false
 	flush := func() {
 		if s := strings.TrimSpace(strings.Join(cur, "\n")); s != "" {
+			if headed && len(cur) > 1 {
+				s = strings.TrimSpace(cur[0]) + ". " + strings.TrimSpace(strings.Join(cur[1:], "\n"))
+			}
 			segs = append(segs, s)
 		}
 		cur = nil
+		headed = false
 	}
 	for _, line := range strings.Split(text, "\n") {
 		if rest, ok := headingLine(line); ok {
 			flush()
 			cur = []string{rest}
+			headed = true
 			continue
 		}
 		cur = append(cur, line)
@@ -288,6 +297,23 @@ func soundEffect(query string) (id, name string, ok bool) {
 	return id, sounds.EffectNameByID(id), true
 }
 
+// chunkEndCommaMark replaces a comma a cut chunk ends on, so Alice raises her
+// intonation instead of trailing off mid-thought. Owner-adjustable: changing
+// this constant changes how every comma-cut batch step ends.
+const chunkEndCommaMark = "?"
+
+// fixTrailingComma rewrites a chunk that ends on a "," to end on
+// chunkEndCommaMark instead — a cut that leaves a dangling comma reads as a
+// flat, unfinished phrase, and Alice's default delivery makes it sound cut
+// off. Anything else passes through untouched.
+func fixTrailingComma(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 || runes[len(runes)-1] != ',' {
+		return s
+	}
+	return string(runes[:len(runes)-1]) + chunkEndCommaMark
+}
+
 func splitChunks(text string, max int) []string {
 	runes := []rune(text)
 	if len(runes) <= max {
@@ -305,7 +331,7 @@ func splitChunks(text string, max int) []string {
 			// boundary inside it (avoids splitting the final chunk more
 			// than needed).
 			if s := strings.TrimSpace(string(runes[start:])); s != "" {
-				out = append(out, s)
+				out = append(out, fixTrailingComma(s))
 			}
 			break
 		}
@@ -314,7 +340,7 @@ func splitChunks(text string, max int) []string {
 			cut = end
 		}
 		if s := strings.TrimSpace(string(runes[start:cut])); s != "" {
-			out = append(out, s)
+			out = append(out, fixTrailingComma(s))
 		}
 		start = cut
 	}
@@ -351,6 +377,15 @@ func bestCut(runes []rune, start, end int) int {
 		}
 		return j
 	}
+	// A comma that introduces the conjunction "но" is a real clause boundary —
+	// «А, но Б» splits here, outranking any ordinary comma later in the
+	// window, so a long complex sentence is cut at its turning point, not
+	// mid-thought.
+	for i := end - 1; i >= start; i-- {
+		if isCommaBeforeNo(runes, i) {
+			return i + 1
+		}
+	}
 	for i := end - 1; i >= start; i-- {
 		switch runes[i] {
 		case ',', ';', '—':
@@ -368,6 +403,44 @@ func bestCut(runes []rune, start, end int) int {
 func isSentenceEnd(r rune) bool {
 	switch r {
 	case '.', '!', '?', '…':
+		return true
+	}
+	return false
+}
+
+// isCommaBeforeNo reports whether the "," at i is a clause boundary: the word
+// after it (skipping whitespace) is the standalone conjunction "но" (in any
+// case). Used by bestCut so a complex sentence «А, но Б» splits at its
+// turning point rather than at an ordinary comma.
+func isCommaBeforeNo(runes []rune, i int) bool {
+	if i >= len(runes) || runes[i] != ',' {
+		return false
+	}
+	j := i + 1
+	for j < len(runes) && isWhitespace(runes[j]) {
+		j++
+	}
+	if j+1 >= len(runes) {
+		return false
+	}
+	first, second := runes[j], runes[j+1]
+	butFirst := first == 'н' || first == 'Н'
+	butSecond := second == 'о' || second == 'О'
+	if !(butFirst && butSecond) {
+		return false
+	}
+	// «но» must be a standalone conjunction, not the start of a longer word
+	// («нож», «ночь») — the rune after it has to end the word.
+	j += 2
+	if j >= len(runes) {
+		return true
+	}
+	return isWhitespace(runes[j]) || isClosingRune(runes[j]) || isPunctRune(runes[j])
+}
+
+func isPunctRune(r rune) bool {
+	switch r {
+	case ',', '.', '!', '?', ';', ':', '—', '…':
 		return true
 	}
 	return false
