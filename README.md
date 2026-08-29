@@ -163,6 +163,7 @@ Device id колонки видно в выводе `/stations`. Если хос
 > /alarm 7:30
 > /reminder завтра купить хлеб
 > /play  /pause  /stop  /next  /prev
+> /batch 1 7 1 "привет | как дела"   # несколько действий одним облачным сценарием
 > /weather
 > /news
 > /scenarios
@@ -273,6 +274,10 @@ curl -X POST localhost:8737/commands/timer \
 curl -X POST localhost:8737/commands/say \
   -H "X-Yandex-Token: <свой x-token>" \
   -d '{"text": "привет с сервера", "station": "Кухня"}'
+
+curl -X POST localhost:8737/commands/batch \
+  -H "X-Yandex-Token: <свой x-token>" \
+  -d '{"stop": "1", "volume": "6", "play": "1", "phrases": "привет | как дела"}'
 
 curl -X POST localhost:8737/commands/scenario \
   -H "X-Yandex-Token: <свой x-token>" \
@@ -398,6 +403,7 @@ MCP-протокол.
 |---|---|
 | `alice_say` | `text` (обяз.), `station` (опц.) |
 | `alice_cmd` | `text` (обяз.), `station` (опц.) |
+| `alice_batch` | `stop` (опц.), `volume` (опц., число), `play` (опц.), `phrases` (опц.) — несколько действий одним сценарием |
 | `alice_notify` | `text` (обяз.), `volume` (опц., число), `station` (опц.) |
 | `alice_volume` | `level` (обяз., число), `station` (опц.) |
 | `alice_scenario` | `name` (обяз.) |
