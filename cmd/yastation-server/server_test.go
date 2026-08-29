@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/denizsincar29/yastation/internal/access"
 	"github.com/denizsincar29/yastation/internal/app"
+	"github.com/denizsincar29/yastation/internal/article"
 	"github.com/denizsincar29/yastation/internal/dispatch"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
@@ -367,6 +369,33 @@ func TestHandleCommandByNameConfigCommandUsesNamedParams(t *testing.T) {
 	calls := f.Calls()
 	if len(calls) != 1 || !strings.Contains(calls[0], "Кухня") || !strings.Contains(calls[0], "10 минут проверить духовку") {
 		t.Fatalf("calls=%v", calls)
+	}
+}
+
+func TestHandleCommandByNameRead(t *testing.T) {
+	f := &fakeStation{}
+	a := app.New(f)
+	a.FetchArticle = func(ctx context.Context, url string) (*article.Article, error) {
+		return &article.Article{
+			Title:  "Настройка радио — Блог",
+			Text:   "# Настройка\nКороткая секция.\n## Совет\nЕщё одна.",
+			Source: url,
+		}, nil
+	}
+	defer a.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /commands/{name}", handleCommandByName(nil, nil, a, newTokenClientCache(time.Minute), emptyAccessList))
+
+	req := httptest.NewRequest(http.MethodPost, "/commands/read", strings.NewReader(`{"url":"https://example.com/radio","stop":"1"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "[читать]") {
+		t.Fatalf("expected [читать] confirmation, got: %s", rec.Body.String())
 	}
 }
 

@@ -154,23 +154,72 @@ func splitMarkers(text string) []soundMark {
 // batchActions turns a batch phrases string into ordered actions, each say
 // step fitting quasar.MaxTTSChunkChars. An explicit "|" separator forces a
 // boundary between parts; inside a part, ((...)) whisper segments become
-// their own whisper steps. A [query]/№query№ sound marker is inlined as a
+// their own whisper steps and every markdown heading starts a fresh chunk
+// (splitHeadings). A [query]/№query№ sound marker is inlined as a
 // <speaker audio="..."> tag when the current chunk has room, else it plays
-// as its own sound_play step (see batchSegmentActions) — so a long story
-// that mixes normal voice, a whispered aside and several sounds still fits
-// one cloud scenario.
+// as its own sound_play step (see batchSegmentActions) — so a long article
+// or story that mixes normal voice, a whispered aside and several sounds
+// still fits one cloud scenario, section by section.
 func batchActions(text string) ([]quasar.BatchAction, error) {
 	var acts []quasar.BatchAction
 	for _, part := range strings.Split(text, "|") {
 		for _, seg := range splitWhisperSegments(part) {
-			segActs, err := batchSegmentActions(seg, quasar.MaxTTSChunkChars)
-			if err != nil {
-				return nil, err
+			for _, piece := range splitHeadings(seg.Text) {
+				segActs, err := batchSegmentActions(speechSegment{Text: piece, Whisper: seg.Whisper}, quasar.MaxTTSChunkChars)
+				if err != nil {
+					return nil, err
+				}
+				acts = append(acts, segActs...)
 			}
-			acts = append(acts, segActs...)
 		}
 	}
 	return acts, nil
+}
+
+// splitHeadings splits text on markdown heading lines ("#"/"##"/... at the
+// start of a line) into sections. Every piece after the first begins where a
+// heading started, and the "#" marks are stripped so Alice reads the section
+// title, not the syntax — an article's sections become its own chunks
+// instead of one wall of text. Prose with no headings comes back as a single
+// piece.
+func splitHeadings(text string) []string {
+	var segs []string
+	var cur []string
+	flush := func() {
+		if s := strings.TrimSpace(strings.Join(cur, "\n")); s != "" {
+			segs = append(segs, s)
+		}
+		cur = nil
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if rest, ok := headingLine(line); ok {
+			flush()
+			cur = []string{rest}
+			continue
+		}
+		cur = append(cur, line)
+	}
+	flush()
+	return segs
+}
+
+// headingLine reports whether line is a markdown heading — 1..6 "#"s followed
+// by a space or the end of the line (so "#foo" stays prose) — returning the
+// line with the marks stripped. Leading whitespace is tolerated.
+func headingLine(line string) (string, bool) {
+	s := strings.TrimLeft(line, " \t")
+	hashes := 0
+	for hashes < len(s) && s[hashes] == '#' {
+		hashes++
+	}
+	if hashes == 0 || hashes > 6 {
+		return "", false
+	}
+	rest := s[hashes:]
+	if rest != "" && rest[0] != ' ' {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
 }
 
 // batchSegmentActions turns one whisper segment into ordered batch actions.

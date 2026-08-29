@@ -165,6 +165,8 @@ Device id колонки видно в выводе `/stations`. Если хос
 > /play  /pause  /stop  /next  /prev
 > /batch 1 7 1 "привет | как дела"   # несколько действий одним облачным сценарием
 > /batch 0 0 0 "Рассказ. ((шёпот)) [взрыв]"   # внутри фраз: ((шёпот)) и [звук], длинный текст режется
+> /read https://habr.com/ru/articles/   # статья/страница по URL: стягивает, вытаскивает текст по заголовкам, читает секциями
+> /read 1 6000 1 https://example.com/x  # [stop] [max рун] [play] <url> — остановить музыку, прочитать, продолжить
 > /weather
 > /news
 > /scenarios
@@ -283,6 +285,10 @@ curl -X POST localhost:8737/commands/batch \
 curl -X POST localhost:8737/commands/scenario \
   -H "X-Yandex-Token: <свой x-token>" \
   -d '{"name": "Вечер"}'
+
+curl -X POST localhost:8737/commands/read \
+  -H "X-Yandex-Token: <свой x-token>" \
+  -d '{"url": "https://habr.com/ru/articles/", "stop": "1", "play": "1", "station": "Кухня"}'
 ```
 
 `GET /commands` покажет для каждой команды `"params": [{"name": "minutes",
@@ -408,6 +414,7 @@ MCP-протокол.
 | `alice_notify` | `text` (обяз.), `volume` (опц., число), `station` (опц.) |
 | `alice_volume` | `level` (обяз., число), `station` (опц.) |
 | `alice_scenario` | `name` (обяз.) |
+| `alice_read` | `url` (обяз.), `stop` (опц.), `max` (опц., число), `play` (опц.), `station` (опц.) — стянуть статью по URL и прочитать секциями по заголовкам |
 | `alice_help` | без параметров — текстовый обзор всех команд разом |
 | `alice_stations` | без параметров — список колонок на аккаунте |
 

@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/denizsincar29/yastation/internal/article"
 	"github.com/denizsincar29/yastation/internal/quasar"
 )
 
@@ -664,5 +666,110 @@ func TestSndcatListsCategoriesOnly(t *testing.T) {
 	out2 := mustExec(t, a, "/soundcategories")
 	if out2 != out {
 		t.Fatalf("/soundcategories should match /sndcat")
+	}
+}
+
+func TestReadCommandFetchesAndReadsAloud(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	a.FetchArticle = func(ctx context.Context, url string) (*article.Article, error) {
+		return &article.Article{
+			Title:  "Настройка радио — Блог",
+			Text:   "# Настройка\nКороткая секция.\n## Совет\nЕщё одна.",
+			Source: url,
+		}, nil
+	}
+	out, err := a.Execute(context.Background(), `/read 1 100 1 https://example.com/radio`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[читать] Настройка радио") {
+		t.Fatalf("out=%q", out)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected one Batch call, got %v", calls)
+	}
+	want := "cmd:останови;say:Заголовок: Настройка радио;say:Настройка\nКороткая секция.;say:Совет\nЕщё одна.;cmd:продолжить"
+	if calls[0] != "batch::"+want {
+		t.Fatalf("batch call:\n got %q\nwant %q", calls[0], "batch::"+want)
+	}
+}
+
+func TestReadCommandRequiresURL(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), "/read"); err == nil {
+		t.Fatal("expected error for missing URL")
+	}
+}
+
+func TestReadCommandRejectsEmptyPage(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	a.FetchArticle = func(ctx context.Context, url string) (*article.Article, error) {
+		return &article.Article{Title: "", Text: "   ", Source: url}, nil
+	}
+	if _, err := a.Execute(context.Background(), "/read https://example.com"); err == nil {
+		t.Fatal("expected error for empty page")
+	}
+}
+
+func TestReadCommandPropagatesFetchError(t *testing.T) {
+	a, _ := newTestApp()
+	defer a.Close()
+	a.FetchArticle = func(ctx context.Context, url string) (*article.Article, error) {
+		return nil, errors.New("сеть недоступна")
+	}
+	if _, err := a.Execute(context.Background(), "/read https://example.com"); err == nil {
+		t.Fatal("expected fetch error to propagate")
+	}
+}
+
+func TestCleanTitleStripsSiteSegment(t *testing.T) {
+	for in, want := range map[string]string{
+		"Статья — Блог":         "Статья",
+		"Статья | Блог":         "Статья",
+		"Статья / Хабр":         "Статья",
+		"Статья без суффикса":   "Статья без суффикса",
+		"Статья с тире - внутри": "Статья с тире - внутри",
+	} {
+		if got := cleanTitle(in); got != want {
+			t.Fatalf("cleanTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestArticleTextTruncatesAtHeadingBoundary(t *testing.T) {
+	art := &article.Article{
+		Title: "T",
+		Text:  "# Раздел один\nДлинный текст раздела один.\n## Раздел два\nЕщё текст.",
+	}
+	// Cap small enough that the window lands inside section one, before the
+	// "## Раздел два" heading — truncation should cut at that heading.
+	text, truncated := articleText(art, "40")
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if strings.Contains(text, "Раздел два") {
+		t.Fatalf("truncation didn't cut at heading: %q", text)
+	}
+	if !strings.HasPrefix(text, "Заголовок: T") {
+		t.Fatalf("title missing from read text: %q", text)
+	}
+	if _, ok := articleText(art, "100000"); ok {
+		t.Fatal("large max shouldn't truncate")
+	}
+}
+
+func TestPluralRunes(t *testing.T) {
+	cases := []struct{ n int; want string }{
+		{1, "шаг"}, {2, "шага"}, {4, "шага"}, {5, "шагов"},
+		{11, "шагов"}, {21, "шаг"}, {22, "шага"}, {25, "шагов"},
+	}
+	for _, c := range cases {
+		if got := pluralRunes(c.n, "шаг", "шага", "шагов"); got != c.want {
+			t.Fatalf("pluralRunes(%d) = %q, want %q", c.n, got, c.want)
+		}
 	}
 }

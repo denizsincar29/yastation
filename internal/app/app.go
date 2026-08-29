@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/denizsincar29/yastation/internal/article"
 	"github.com/denizsincar29/yastation/internal/dispatch"
 	"github.com/denizsincar29/yastation/internal/quasar"
 	"github.com/denizsincar29/yastation/internal/queue"
@@ -75,12 +76,16 @@ type App struct {
 	Queue      *queue.Queue
 	Scheduler  *scheduler.Scheduler
 	Dispatcher *dispatch.Dispatcher
+
+	// FetchArticle retrieves a page's readable text for /read. Exposed so
+	// tests can point it at a stub; defaults to article.Fetch.
+	FetchArticle func(ctx context.Context, url string) (*article.Article, error)
 }
 
 // New builds an App around an already-connected station client
 // (typically a *quasar.Client, or a fake in tests).
 func New(client StationAPI) *App {
-	a := &App{Client: client}
+	a := &App{Client: client, FetchArticle: article.Fetch}
 	a.Queue = queue.New(100, nil)
 	a.Scheduler = scheduler.New(func(commandLine string) {
 		a.Enqueue(commandLine)
@@ -380,6 +385,58 @@ func (a *App) registerCommands() {
 			}
 			return "[батч] " + strings.Join(parts, "; "), nil
 		}, "batch")
+
+	// read fetches a page and reads it aloud section by section: HTML is
+	// reduced to its main content with headings kept, then batchActions
+	// treats every heading as a new chunk (splitHeadings) so Alice reads the
+	// article as digestible sections rather than one wall of text.
+	d.HandleBoundCat("Основное",
+		"Прочитать статью или страницу по URL через Алису: стягивает страницу, вытаскивает текст (HTML → читаемые секции по заголовкам), зачитывает по частям. /read [stop] [max] [play] <url> — например /read 1 6000 1 https://habr.com/ru/articles/1/",
+		true,
+		[]dispatch.Param{
+			{Name: "stop", Kind: "string", Optional: true, Help: "\"1\" — сначала остановить музыку"},
+			{Name: "max", Kind: "number", Optional: true, Help: "Максимум рун текста для чтения (по умолчанию 6000)"},
+			{Name: "play", Kind: "string", Optional: true, Help: "\"1\" — в конце продолжить музыку"},
+			{Name: "url", Kind: "string", Help: "URL статьи или страницы"},
+		},
+		func(ctx context.Context, station string, v map[string]string) (string, error) {
+			url := strings.TrimSpace(v["url"])
+			if url == "" {
+				return "", fmt.Errorf("нужен URL: /read https://...")
+			}
+			art, err := a.FetchArticle(ctx, url)
+			if err != nil {
+				return "", err
+			}
+			text, truncated := articleText(art, v["max"])
+			actions, err := batchActions(text)
+			if err != nil {
+				return "", err
+			}
+			if len(actions) == 0 {
+				return "", fmt.Errorf("на странице нет текста для чтения")
+			}
+			var acts []quasar.BatchAction
+			if truthy(v["stop"]) {
+				acts = append(acts, quasar.BatchAction{Kind: "cmd", Text: "останови"})
+			}
+			acts = append(acts, actions...)
+			if truthy(v["play"]) {
+				acts = append(acts, quasar.BatchAction{Kind: "cmd", Text: "продолжить"})
+			}
+			if err := a.Client.Batch(station, acts); err != nil {
+				return "", err
+			}
+			title := cleanTitle(art.Title)
+			if title == "" {
+				title = url
+			}
+			out := fmt.Sprintf("[читать] %s — %d %s", title, len(actions), pluralRunes(len(actions), "шаг", "шага", "шагов"))
+			if truncated {
+				out += " (обрезано)"
+			}
+			return out, nil
+		}, "read", "r", "article")
 
 	// notify keeps its own legacy REPL handler (HandleNamed, not
 	// HandleBoundCat) because its documented slash syntax puts volume=
@@ -720,6 +777,70 @@ func (a *App) registerCommands() {
 		func(ctx context.Context, station string, v map[string]string) (string, error) {
 			return d.Help(), nil
 		}, "help", "h", "?")
+}
+
+// defaultMaxArticleRunes caps how much of a page /read will read aloud —
+// enough for a long article, without risking a hundreds-of-steps scenario.
+const defaultMaxArticleRunes = 6000
+
+// articleText assembles the read-aloud text for an article: the title first
+// (Alice announces what she's reading), then the body, capped at max runes
+// (from the /read "max" param, else defaultMaxArticleRunes). Truncation cuts
+// at the last heading boundary inside the window rather than mid-word, so the
+// last section heard is still a complete one.
+func articleText(art *article.Article, maxRaw string) (text string, truncated bool) {
+	max := defaultMaxArticleRunes
+	if maxRaw != "" {
+		if n, err := strconv.Atoi(maxRaw); err == nil && n > 0 {
+			max = n
+		}
+	}
+	var parts []string
+	if title := cleanTitle(art.Title); title != "" {
+		parts = append(parts, "Заголовок: "+title)
+	}
+	if art.Text != "" {
+		parts = append(parts, art.Text)
+	}
+	text = strings.Join(parts, "\n\n")
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text, false
+	}
+	cut := max
+	if idx := strings.LastIndex(string(runes[:max]), "\n#"); idx > 0 {
+		cut = idx
+	}
+	text = strings.TrimSpace(string(runes[:cut]))
+	return text, true
+}
+
+// cleanTitle strips a trailing site-name segment off an HTML <title>
+// ("Статья — Блог" / "Статья | Блог" / "Статья / Хабр") so Alice announces
+// just the article title.
+func cleanTitle(title string) string {
+	for _, sep := range []string{" — ", " – ", " | ", " / "} {
+		if i := strings.LastIndex(title, sep); i > 0 {
+			title = strings.TrimSpace(title[:i])
+		}
+	}
+	return title
+}
+
+// pluralRunes picks the Russian plural form for n: один шаг / два шага /
+// пять шагов.
+func pluralRunes(n int, one, few, many string) string {
+	n %= 100
+	if n >= 11 && n <= 14 {
+		return many
+	}
+	switch n % 10 {
+	case 1:
+		return one
+	case 2, 3, 4:
+		return few
+	}
+	return many
 }
 
 // executeScript runs commands from a file line by line: blank lines and

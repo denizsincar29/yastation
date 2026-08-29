@@ -181,6 +181,7 @@ func TestMCPEndToEnd(t *testing.T) {
 		"alice_say": false, "alice_cmd": false, "alice_notify": false,
 		"alice_volume": false, "alice_scenario": false,
 		"alice_help": false, "alice_stations": false,
+		"alice_read": false,
 	}
 	for _, tool := range toolsResult.Tools {
 		if _, ok := want[tool.Name]; ok {

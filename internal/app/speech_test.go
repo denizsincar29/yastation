@@ -301,6 +301,46 @@ func TestBatchActionsSoundWithoutEffectPushesInlineToNextChunk(t *testing.T) {
 	}
 }
 
+func TestSplitHeadingsPlainProse(t *testing.T) {
+	got := splitHeadings("просто\nтекст без заголовков")
+	want := []string{"просто\nтекст без заголовков"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitHeadingsSplitsOnHeadingsAndStripsMarks(t *testing.T) {
+	got := splitHeadings("# Введение\nПервая часть.\n## Раздел\nВторая часть.")
+	want := []string{"Введение\nПервая часть.", "Раздел\nВторая часть."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestSplitHeadingsHashWithoutSpaceIsProse(t *testing.T) {
+	got := splitHeadings("это # не заголовок")
+	want := []string{"это # не заголовок"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestBatchActionsHeadingStartsNewChunk(t *testing.T) {
+	// A heading is a hard boundary: the section after it starts its own say
+	// step even though the previous section's tail would have left room.
+	got, err := batchActions("# Настройка\nКороткая секция.\n## Совет\nЕщё одна.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{
+		{Kind: "say", Text: "Настройка\nКороткая секция."},
+		{Kind: "say", Text: "Совет\nЕщё одна."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
 func TestBatchActionsLongSplitsToCap(t *testing.T) {
 	got, err := batchActions(strings.Repeat("а", 300))
 	if err != nil {

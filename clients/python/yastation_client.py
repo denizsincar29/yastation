@@ -121,6 +121,31 @@ class YastationClient:
         self._raise_if_error(result)
         return result.get("output", "")
 
+    def read(
+        self,
+        url: str,
+        stop: bool = False,
+        play: bool = False,
+        max_runes: Optional[int] = None,
+        station: Optional[str] = None,
+    ) -> str:
+        """Прочитать статью/страницу по URL через Алису (как /read): сервер
+        стягивает страницу, вытаскивает текст секциями по заголовкам и
+        зачитывает вслух. stop=True сначала остановит музыку, play=True —
+        продолжит её после, max_runes ограничит длину чтения."""
+        body: dict = {"url": url}
+        if stop:
+            body["stop"] = "1"
+        if play:
+            body["play"] = "1"
+        if max_runes is not None:
+            body["max"] = str(max_runes)
+        if station:
+            body["station"] = station
+        result = self._request("POST", "/commands/read", body)
+        self._raise_if_error(result)
+        return result.get("output", "")
+
     def stations(self) -> list[Station]:
         """Список колонок аккаунта, привязанного к yandex_token
         (bring-your-own-token режим — без yandex_token сервер не знает,
