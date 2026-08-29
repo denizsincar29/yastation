@@ -160,20 +160,23 @@ func contentRoot(doc *html.Node) *html.Node {
 }
 
 // skipTags are subtrees that never hold article prose (or carry boilerplate
-// we don't want Alice to read).
+// we don't want Alice to read). pre/code are skipped because Alice reads code
+// awfully — a block of "package main func ..." comes out as one long groan —
+// and it never carries prose worth hearing.
 var skipTags = map[string]bool{
 	"script": true, "style": true, "noscript": true, "template": true,
 	"svg": true, "iframe": true, "object": true, "embed": true,
 	"nav": true, "header": true, "footer": true, "aside": true,
 	"form": true, "button": true, "select": true, "textarea": true,
 	"input": true, "option": true, "canvas": true, "dialog": true,
+	"pre": true, "code": true,
 }
 
 // blockTags start and end a new line around their content.
 var blockTags = map[string]bool{
 	"p": true, "div": true, "h1": true, "h2": true, "h3": true,
 	"h4": true, "h5": true, "h6": true, "li": true, "blockquote": true,
-	"pre": true, "br": true, "ul": true, "ol": true, "section": true,
+	"br": true, "ul": true, "ol": true, "section": true,
 	"article": true, "table": true, "tr": true, "td": true, "th": true,
 	"hr": true, "figure": true, "figcaption": true, "main": true,
 	"body": true, "dl": true, "dt": true, "dd": true, "details": true,
@@ -188,6 +191,16 @@ func walk(n *html.Node, b *strings.Builder) {
 		b.WriteString(n.Data)
 	case html.ElementNode:
 		tag := n.Data
+		if isMathScript(n) {
+			// MathJax keeps the raw TeX/AsciiMath source in a script that the
+			// browser later renders. Alice reads the source itself as LaTeX —
+			// "x^2" spoken beats the rendered MathML, which would come out as
+			// an unreadable jumble of mi/mo/msup.
+			if tex := mathScriptText(n); tex != "" {
+				b.WriteString(" " + tex + " ")
+			}
+			return
+		}
 		if skipTags[tag] || isHidden(n) {
 			return
 		}
@@ -264,6 +277,29 @@ func attr(n *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+// isMathScript reports whether n is a <script> that holds raw math source for
+// MathJax: type="math/tex", "math/tex; mode=display" (display formulas) or
+// "math/asciimath". textOf can't be used on it — script is in skipTags, so it
+// would come back empty.
+func isMathScript(n *html.Node) bool {
+	if n.Data != "script" {
+		return false
+	}
+	t := strings.TrimSpace(attr(n, "type"))
+	return strings.HasPrefix(t, "math/tex") || strings.HasPrefix(t, "math/asciimath")
+}
+
+// mathScriptText returns the raw source text of a math script node.
+func mathScriptText(n *html.Node) string {
+	var sb strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.TextNode {
+			sb.WriteString(c.Data)
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // isHidden skips elements that won't render: the hidden attribute, or an

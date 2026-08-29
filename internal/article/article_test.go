@@ -61,6 +61,37 @@ func TestParseHTMLPreservesHeadingsAndSkipsBoilerplate(t *testing.T) {
 	}
 }
 
+func TestParseHTMLSkipsCodeKeepsMathLatex(t *testing.T) {
+	html := `<!DOCTYPE html><html><head><title>Формулы</title></head><body>
+<article>
+<p>Начнём с простого: <code>cd /var/log</code> не прочтём.</p>
+<pre><code>package main
+func main() { println("hi") }</code></pre>
+<p>Корень из двух: <script type="math/tex">\sqrt{2}</script>.</p>
+<p>Интеграл: <script type="math/tex; mode=display">\int_0^1 x\,dx</script></p>
+</article>
+</body></html>`
+	doc := mustParse(t, html)
+	root := contentRoot(doc)
+	var b strings.Builder
+	walk(root, &b)
+	got := cleanText(b.String())
+
+	for _, bad := range []string{"cd", "package main", "println", "func main"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("code leaked: %q in:\n%s", bad, got)
+		}
+	}
+	for _, want := range []string{`\sqrt{2}`, `\int_0^1 x\,dx`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("math latex missing %q in:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "Корень из двух:") {
+		t.Fatalf("prose around math lost:\n%s", got)
+	}
+}
+
 func TestExtractTitle(t *testing.T) {
 	doc := mustParse(t, sampleHTML)
 	if got := extractTitle(doc); got != "Настройка Baofeng BF-888S — Блог радиолюбителя" {
