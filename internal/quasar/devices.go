@@ -205,10 +205,29 @@ func buildTTSScenario(name string, dev Device, text string) Scenario {
 // limit is measured live, not guessed: Yandex rejects a tts step longer
 // than 100 symbols with QUASAR_SERVER_ACTION_LENGTH_ERROR ("Команда Алисе
 // должна быть не длиннее 100 символов"). 96 leaves a small margin.
-// Longer text is split before batching (see internal/app.splitSpeech), so
+// Longer text is split before batching (see internal/app.batchActions), so
 // this is the one knob to turn if a phrase ever fails to play because it's
 // too long.
 const MaxTTSChunkChars = 96
+
+// capSay is the tts capability for a normal-voice utterance.
+func capSay(text string) ScenarioCapability {
+	return ScenarioCapability{
+		Type:  "devices.capabilities.quasar",
+		State: ScenarioCapabilityState{Instance: "tts", Value: map[string]string{"text": text}},
+	}
+}
+
+// capSayWhisper is capSay with Alice's whisper flag. {"text","lang","whisper"}
+// is exactly the state her own client sets for the local tts capability
+// (see Client.SayWhisper), and Yandex accepts it inside a cloud scenario
+// step too — confirmed by probe against a live account.
+func capSayWhisper(text string) ScenarioCapability {
+	return ScenarioCapability{
+		Type:  "devices.capabilities.quasar",
+		State: ScenarioCapabilityState{Instance: "tts", Value: map[string]any{"text": text, "lang": "", "whisper": true}},
+	}
+}
 
 // buildBatchScenario is a scenario that runs several capabilities on one
 // device back to back — the batching mechanism Client.Batch uses. Each

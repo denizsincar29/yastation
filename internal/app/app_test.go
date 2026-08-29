@@ -529,6 +529,23 @@ func TestBatchSplitsLongPhrases(t *testing.T) {
 	}
 }
 
+func TestBatchWhisperAndSoundSteps(t *testing.T) {
+	a, f := newTestApp()
+	defer a.Close()
+	text := "Стою у двери. ((Тихо тут…)) Он взял и кинул гранату [взрыв]. Тихо."
+	if _, err := a.ExecuteArgs(context.Background(), "batch", []string{"", "", "", text}); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls=%v", calls)
+	}
+	want := `batch::say:Стою у двери.;whisper:Тихо тут…;say:Он взял и кинул гранату <speaker audio="alice-sounds-things-explosion-1.opus">. Тихо.`
+	if calls[0] != want {
+		t.Fatalf("call=%q want=%q", calls[0], want)
+	}
+}
+
 func TestWeatherViaCapability(t *testing.T) {
 	a, f := newTestApp()
 	defer a.Close()

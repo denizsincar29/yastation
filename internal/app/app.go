@@ -334,13 +334,13 @@ func (a *App) registerCommands() {
 	// Yandex executes them in order, Alice finishing each before the next —
 	// the batch the local Glagol protocol can't do (see quasar.Client.Batch).
 	d.HandleBoundCat("Основное",
-		"Батч: несколько действий одним облачным сценарием — Алиса договаривает, делает следующее. /batch [stop] [volume] [play] [фразы через |] — например /batch 1 7 \"привет | как дела\"",
+		"Батч: несколько действий одним облачным сценарием — Алиса договаривает, делает следующее. /batch [stop] [volume] [play] [фразы через |] — например /batch 1 7 \"привет | как дела\". Внутри фраз работают ((шёпот)) и [звук]",
 		true,
 		[]dispatch.Param{
 			{Name: "stop", Kind: "string", Optional: true, Help: "\"1\" — сначала остановить музыку"},
 			{Name: "volume", Kind: "number", Optional: true, Help: "Громкость 0..10"},
 			{Name: "play", Kind: "string", Optional: true, Help: "\"1\" — в конце продолжить музыку"},
-			{Name: "phrases", Kind: "string", Optional: true, Help: "Текст для озвучивания; фразы через |, каждая режется до ~128 символов"},
+			{Name: "phrases", Kind: "string", Optional: true, Help: "Текст для озвучивания; фразы через |, каждая режется до ~100 символов; ((шёпот)) и [звук] поддерживаются"},
 		},
 		func(ctx context.Context, station string, v map[string]string) (string, error) {
 			var actions []quasar.BatchAction
@@ -353,9 +353,11 @@ func (a *App) registerCommands() {
 				}
 				actions = append(actions, quasar.BatchAction{Kind: "cmd", Text: "громкость на " + vol})
 			}
-			for _, p := range splitSpeech(v["phrases"]) {
-				actions = append(actions, quasar.BatchAction{Kind: "say", Text: p})
+			says, err := batchActions(v["phrases"])
+			if err != nil {
+				return "", err
 			}
+			actions = append(actions, says...)
 			if truthy(v["play"]) {
 				actions = append(actions, quasar.BatchAction{Kind: "cmd", Text: "продолжить"})
 			}

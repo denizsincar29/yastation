@@ -183,27 +183,96 @@ func TestSpeakStopsOnFirstSegmentError(t *testing.T) {
 	}
 }
 
-func TestSplitSpeechStaysWholeWhenShort(t *testing.T) {
-	got := splitSpeech("привет как дела")
-	want := []string{"привет как дела"}
+func TestBatchActionsShortStaysWhole(t *testing.T) {
+	got, err := batchActions("привет как дела")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{{Kind: "say", Text: "привет как дела"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got=%q", got)
+		t.Fatalf("got=%+v", got)
 	}
 }
 
-func TestSplitSpeechPipeForcesChunks(t *testing.T) {
-	got := splitSpeech("один | два | три")
-	want := []string{"один", "два", "три"}
+func TestBatchActionsPipeForcesSteps(t *testing.T) {
+	got, err := batchActions("один | два | три")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{
+		{Kind: "say", Text: "один"},
+		{Kind: "say", Text: "два"},
+		{Kind: "say", Text: "три"},
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got=%q", got)
+		t.Fatalf("got=%+v", got)
 	}
 }
 
-func TestSplitSpeechDropsEmptyPipeParts(t *testing.T) {
-	got := splitSpeech("один | | два")
-	want := []string{"один", "два"}
+func TestBatchActionsDropsEmptyPipeParts(t *testing.T) {
+	got, err := batchActions("один | | два")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{{Kind: "say", Text: "один"}, {Kind: "say", Text: "два"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got=%q", got)
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestBatchActionsWhisperSegmentBecomesWhisperStep(t *testing.T) {
+	got, err := batchActions("Стою у двери. ((Тихо тут…)) Открываю.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quasar.BatchAction{
+		{Kind: "say", Text: "Стою у двери."},
+		{Kind: "say", Text: "Тихо тут…", Whisper: true},
+		{Kind: "say", Text: "Открываю."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestBatchActionsSoundTagNeverSplitAcrossChunks(t *testing.T) {
+	// The explosion tag sits right where the plain chunker's 96-rune window
+	// would have landed; it must survive whole, never cut in two.
+	tag := `<speaker audio="alice-sounds-things-explosion-1.opus">`
+	text := strings.Repeat("а", 70) + "[взрыв]" + strings.Repeat("б", 30)
+	got, err := batchActions(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined string
+	for _, g := range got {
+		joined += g.Text
+		if len([]rune(g.Text)) > quasar.MaxTTSChunkChars {
+			t.Fatalf("chunk exceeds cap: %d runes %q", len([]rune(g.Text)), g.Text)
+		}
+		if strings.Contains(g.Text, "<speaker") && !strings.Contains(g.Text, ">") {
+			t.Fatalf("tag cut in half: %q", g.Text)
+		}
+	}
+	if n := strings.Count(joined, tag); n != 1 {
+		t.Fatalf("sound tag lost or duplicated (found %d): chunks=%+v", n, got)
+	}
+}
+
+func TestBatchActionsLongSplitsToCap(t *testing.T) {
+	got, err := batchActions(strings.Repeat("а", 300))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined string
+	for _, g := range got {
+		joined += g.Text
+		if len([]rune(g.Text)) > quasar.MaxTTSChunkChars {
+			t.Fatalf("chunk exceeds cap: %d runes %q", len([]rune(g.Text)), g.Text)
+		}
+	}
+	if joined != strings.Repeat("а", 300) {
+		t.Fatalf("text mangled across chunks: %d runes", len([]rune(joined)))
 	}
 }
 
@@ -211,7 +280,7 @@ func TestSplitChunksCutsAtLastPeriod(t *testing.T) {
 	// "Hello world." ends well before the cap; the x-tail has no boundary,
 	// so the cut lands right after the period.
 	text := "Hello world. " + strings.Repeat("x", quasar.MaxTTSChunkChars)
-	got := splitSpeech(text)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
 	want := []string{"Hello world.", strings.Repeat("x", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
@@ -222,7 +291,7 @@ func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 	// The "." inside "3.5" isn't followed by a space, so it must not be
 	// taken for a sentence end and split the number apart.
 	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + " 3.5 " + strings.Repeat("b", quasar.MaxTTSChunkChars)
-	got := splitSpeech(text)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
 	if len(got) != 2 {
 		t.Fatalf("got=%q", got)
 	}
@@ -233,7 +302,7 @@ func TestSplitChunksPeriodWithoutFollowingSpaceIsNotABoundary(t *testing.T) {
 
 func TestSplitChunksCutsAtLastCommaWhenNoPeriod(t *testing.T) {
 	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ", " + strings.Repeat("b", quasar.MaxTTSChunkChars)
-	got := splitSpeech(text)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
 	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10) + ",", strings.Repeat("b", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
@@ -242,7 +311,7 @@ func TestSplitChunksCutsAtLastCommaWhenNoPeriod(t *testing.T) {
 
 func TestSplitChunksCutsAtLastSpaceWhenNoPunctuation(t *testing.T) {
 	text := strings.Repeat("a", quasar.MaxTTSChunkChars-10) + " " + strings.Repeat("b", quasar.MaxTTSChunkChars)
-	got := splitSpeech(text)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
 	want := []string{strings.Repeat("a", quasar.MaxTTSChunkChars-10), strings.Repeat("b", quasar.MaxTTSChunkChars)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%q", got)
@@ -251,7 +320,7 @@ func TestSplitChunksCutsAtLastSpaceWhenNoPunctuation(t *testing.T) {
 
 func TestSplitChunksHardSplitsSingleLongWord(t *testing.T) {
 	text := strings.Repeat("a", 300)
-	got := splitSpeech(text)
+	got := splitChunks(text, quasar.MaxTTSChunkChars)
 	var want []string
 	for n := 300; n > 0; n -= quasar.MaxTTSChunkChars {
 		chunk := n

@@ -125,19 +125,85 @@ func expandSoundTags(text string) (string, error) {
 	return b.String(), nil
 }
 
-// splitSpeech splits text into utterance chunks that each fit within
-// quasar.MaxTTSChunkChars — used by /batch to turn one long phrase into
-// several tts items in a single cloud scenario. An explicit "|" separator
-// forces a chunk boundary; each part is then cut at the last sentence end
-// (.!?…), else the last comma/semicolon/dash, else the last space, so
-// Alice never starts mid-word. A single word longer than the cap is
-// hard-split.
-func splitSpeech(text string) []string {
-	var out []string
+// batchActions turns a batch phrases string into ordered say actions, each
+// fitting quasar.MaxTTSChunkChars. An explicit "|" separator forces a
+// boundary between parts; inside a part, ((...)) whisper segments become
+// their own whisper steps and [query]/№query№ sound tags are expanded
+// first, so chunking never cuts through one. This is how /batch speaks a
+// long story that mixes normal voice, a whispered aside and embedded
+// sounds — all as one cloud scenario.
+func batchActions(text string) ([]quasar.BatchAction, error) {
+	var acts []quasar.BatchAction
 	for _, part := range strings.Split(text, "|") {
-		out = append(out, splitChunks(strings.TrimSpace(part), quasar.MaxTTSChunkChars)...)
+		for _, seg := range splitWhisperSegments(part) {
+			expanded, err := expandSoundTags(seg.Text)
+			if err != nil {
+				return nil, err
+			}
+			for _, chunk := range chunkSoundSafe(expanded, quasar.MaxTTSChunkChars) {
+				acts = append(acts, quasar.BatchAction{Kind: "say", Text: chunk, Whisper: seg.Whisper})
+			}
+		}
 	}
-	return out
+	return acts, nil
+}
+
+// chunkSoundSafe splits expanded TTS text — which may contain embedded
+// <speaker audio="..."> tags — into pieces that each fit within max,
+// never cutting through a tag. Tags are short enough to always fit on
+// their own, so each is treated as an atomic token: a chunk either holds
+// the whole tag or none of it.
+func chunkSoundSafe(text string, max int) []string {
+	var chunks []string
+	var cur []rune
+	for _, piece := range soundPieces(text) {
+		pr := []rune(piece)
+		if len(cur)+len(pr) <= max {
+			cur = append(cur, pr...)
+			continue
+		}
+		if s := strings.TrimSpace(string(cur)); s != "" {
+			chunks = append(chunks, s)
+		}
+		cur = nil
+		if len(pr) > max {
+			// Only a long literal run lands here — a tag is short. Reuse the
+			// plain chunker, which keeps sentence/comma/space boundaries (the
+			// piece holds no tags to protect).
+			chunks = append(chunks, splitChunks(piece, max)...)
+			continue
+		}
+		cur = append(cur, pr...)
+	}
+	if s := strings.TrimSpace(string(cur)); s != "" {
+		chunks = append(chunks, s)
+	}
+	return chunks
+}
+
+// soundPieces splits expanded TTS text into alternating literal and sound
+// tag pieces, preserving order.
+func soundPieces(text string) []string {
+	var pieces []string
+	for text != "" {
+		i := strings.Index(text, "<speaker audio=")
+		if i == -1 {
+			pieces = append(pieces, text)
+			break
+		}
+		if i > 0 {
+			pieces = append(pieces, text[:i])
+		}
+		rest := text[i:]
+		j := strings.IndexByte(rest, '>')
+		if j == -1 {
+			pieces = append(pieces, rest)
+			break
+		}
+		pieces = append(pieces, rest[:j+1])
+		text = rest[j+1:]
+	}
+	return pieces
 }
 
 func splitChunks(text string, max int) []string {

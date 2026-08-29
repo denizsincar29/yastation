@@ -206,3 +206,29 @@ func TestScenarioJSONMatchesConfirmedWireShape(t *testing.T) {
 		}
 	})
 }
+
+// TestCapSayWhisperWireShape locks in the whisper variant of the tts
+// capability: {"text","lang","whisper"} — the same state Alice's own client
+// sets for the local tts capability, accepted by Yandex inside a cloud
+// scenario step too (probe against a live account).
+func TestCapSayWhisperWireShape(t *testing.T) {
+	b, err := json.Marshal(capSayWhisper("секрет"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["type"] != "devices.capabilities.quasar" {
+		t.Fatalf("type = %v", got["type"])
+	}
+	state := got["state"].(map[string]any)
+	if state["instance"] != "tts" {
+		t.Fatalf("instance = %v", state["instance"])
+	}
+	value := state["value"].(map[string]any)
+	if value["text"] != "секрет" || value["whisper"] != true || value["lang"] != "" {
+		t.Fatalf("value = %#v", value)
+	}
+}

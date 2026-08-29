@@ -333,6 +333,9 @@ type BatchAction struct {
 	// "громкость на 7", "продолжить", ...).
 	Kind string
 	Text string
+	// Whisper only applies to Kind "say": read the step in a whisper
+	// (the tts capability's whisper flag) instead of the normal voice.
+	Whisper bool
 }
 
 // Batch runs a sequence of actions on one station in a single cloud
@@ -352,10 +355,11 @@ func (c *Client) Batch(station string, actions []BatchAction) error {
 	for _, a := range actions {
 		switch a.Kind {
 		case "say":
-			caps = append(caps, ScenarioCapability{
-				Type:  "devices.capabilities.quasar",
-				State: ScenarioCapabilityState{Instance: "tts", Value: map[string]string{"text": a.Text}},
-			})
+			if a.Whisper {
+				caps = append(caps, capSayWhisper(a.Text))
+			} else {
+				caps = append(caps, capSay(a.Text))
+			}
 		case "cmd":
 			caps = append(caps, ScenarioCapability{
 				Type:  "devices.capabilities.quasar.server_action",
